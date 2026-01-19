@@ -1,8 +1,8 @@
 ---
-title: "vocomatcher"
+title: "VocoMatcher"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{vocomatcher}
+  %\VignetteIndexEntry{VocoMatcher}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

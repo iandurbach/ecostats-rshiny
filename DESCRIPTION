@@ -1,7 +1,8 @@
 Package: vocomatcher
 Title: VocoMatcher
 Version: 0.0.0.9000
-Authors@R: person('Anthony', 'Dalamagas', email = 'anthony.dalamagas@gmail.com', role = c('cre', 'aut'))
+Authors@R: 
+    person("Anthony", "Dalamagas", , "anthony.dalamagas@gmail.com", role = c("aut", "cre"))
 Description: A Shiny app to visually match animal vocalizations in microphone-array PAM studies.
 License: MIT + file LICENSE
 URL: https://github.com/jaytohe/ecostats-rshiny
