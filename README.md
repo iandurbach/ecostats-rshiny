@@ -14,7 +14,7 @@ coverage](https://codecov.io/gh/jaytohe/ecostats-rshiny/branch/main/graph/badge.
 The goal of vocomatcher is to assist with matching and deduplicating
 animal calls in microphone array based acoustic surveys.
 
-This repository originally forked from https://github.com/jaytohe/ecostats-rshiny.
+This repo originally forked from https://github.com/jaytohe/ecostats-rshiny.git.
 
 ## R Version
 
@@ -40,7 +40,7 @@ If you want to try vocomatcher with the example data provided under
 3.  Install the `golem` package
 4.  Open `dev/01_start.R` and run it.
 5.  Open `dev/02_start.R` and run it.
-6.  Then in the terminal of RStudio, type `golem::run_dev()`
+6.  Open `dev/run_dev.R` and run it.
 7.  This should launch the Shiny app on your browser.
 8.  From Vocomatcher, in the Import CSVs screen, you can then navigate
     to the directory of the cloned repo and find the example data under
