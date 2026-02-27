@@ -27,8 +27,9 @@ mod_date_select_server <- function(id, r){
   moduleServer( id, function(input, output, session){
     ns <- session$ns
 
-    observeEvent(r$recData, {
-      optData <- attempt(parse_rec_data(r$recData))
+    observeEvent(list(r$recData, r$selectedRecColumns), {
+      req(r$recData)
+      optData <- attempt(parse_rec_data(r$recData, r$selectedRecColumns))
       if (is_try_error(optData)) {
         golem::invoke_js("erroralert", list(title="Parse error!", msg="Failed to parse recording data. Check stacktrace!"))
       } else {

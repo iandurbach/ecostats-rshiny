@@ -194,15 +194,20 @@ function onTableLoadFinish(table) {
   // Source2: https://github.com/DataTables/Plugins/blob/master/filtering/row-based/range_dates.js
   // DO NOT TOUCH!
    $.fn.dataTableExt.afnFiltering.push(function(settings, data, dataIndex) {
-    if (dateLimits === undefined || filteredRows === undefined || dateLimits.from === null || dateLimits.to === null) {
+   if (dateLimits === undefined || filteredRows === undefined || dateLimits.from === null || dateLimits.to === null) {
       return true;
     }
     if (dataIndex in filteredRows) {
       return false;
     }
+    const tableApi = new $.fn.dataTable.Api(settings);
+    const toaIndex = tableApi.column("toa:name").index();
+    if (toaIndex === undefined || toaIndex === null || toaIndex < 0) {
+      return true;
+    }
     var from = new Date(dateLimits.from);
     var to = new Date(dateLimits.to);
-    var iterDate = new Date(data[4]); // use data from the toa column
+    var iterDate = new Date(data[toaIndex]); // use data from the toa column
     return ((iterDate >= from) && (iterDate <= to)); //keep row only if it is in range.
   })
 

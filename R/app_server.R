@@ -9,6 +9,7 @@ app_server <- function(input, output, session) {
   r <- reactiveValues(
     micData = NULL,
     recData = NULL,
+    selectedRecColumns = character(0), # columns from recordings csv to show in the main table
     recDataAbsFilePath = NULL, # the absolute file path of the selected recordings csv
     recParsedData = NULL,
     frontendData = NULL,

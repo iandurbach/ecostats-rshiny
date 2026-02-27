@@ -4,6 +4,14 @@
   overflow-y: auto;
 }
 
+.recording-column-selector-table th,
+.recording-column-selector-table td {
+  vertical-align: middle;
+}
+.recording-column-selector-table td:first-child {
+  width: 70px;
+}
+
 /* Set the maximum height for the existing calls dropdown */
 /* Enable vertical scrollbar */
 .selectize-dropdown-content {

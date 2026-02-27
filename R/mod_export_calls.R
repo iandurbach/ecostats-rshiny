@@ -52,7 +52,7 @@ mod_export_calls_server <- function(id, r){
 
     capture_history <- reactive({
       req(r$call_groups, (length(r$call_groups) > 0))
-      out <- create_capture_history(r$call_groups)
+      out <- create_capture_history(r$call_groups, r$selectedRecColumns)
       golem::print_dev(out)
       return(out)
     })

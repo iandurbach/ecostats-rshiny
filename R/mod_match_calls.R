@@ -70,9 +70,21 @@ mod_match_calls_server <- function(id, r){
   moduleServer( id, function(input, output, session){
     ns <- session$ns
 
+    group_display_cols <- reactive({
+      req(r$recParsedData)
+      required_raw <- c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "spectrogram")
+      selected <- intersect(unique(r$selectedRecColumns), names(r$recParsedData))
+      cols <- unique(c(required_raw, selected, "suspect_bearing"))
+      intersect(cols, names(r$recParsedData))
+    })
+
     # This is the main view of the unmatched calls
     frontendData <- reactive({
       req(r$recParsedData)
+      base_cols <- c("rec_id", "tick", "mic_id", "toa", "timediff", "sex", "spectrogram")
+      required_raw <- c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "bearing", "spectrogram")
+      extra_cols <- intersect(unique(r$selectedRecColumns), names(r$recParsedData))
+      extra_cols <- setdiff(extra_cols, c(base_cols, required_raw))
       r$recParsedData %>%
         mutate(
           toa = format_ISO8601(toa),
@@ -80,7 +92,7 @@ mod_match_calls_server <- function(id, r){
           tick = checkboxColumn(nrow(r$recParsedData)),
           spectrogram = spectroImageColumn(nrow(r$recParsedData))
           ) %>%
-        select(rec_id, tick, mic_id, toa, timediff, sex, spectrogram)
+        select(rec_id, tick, mic_id, toa, timediff, all_of(extra_cols), sex, spectrogram)
       # we need to null-check because renderDT isolates the reactive frontend data on init and the observer
       # waits for changes to update the table through the datatable proxy.
       # Therefore, we cannot req(input$) because the table won't render at all on init.
@@ -252,10 +264,14 @@ mod_match_calls_server <- function(id, r){
   #' - toa
   #' - sex
   #' and a remove button, to remove a given call from a group.
-  generate_rows <- function(call_group) {
+  generate_rows <- function(call_group, display_cols) {
     rows <- list()
     golem::print_dev(nrow(call_group$backend_rows))
     for (i in seq_len(nrow(call_group$backend_rows))) { # For each backend row
+      cells <- lapply(display_cols, function(col) {
+        val <- call_group$backend_rows[[col]][[i]]
+        tags$td(as.character(val))
+      })
       rows[[i]] <- tags$tr(
         tags$td(tags$button(
           type="button",
@@ -267,9 +283,7 @@ mod_match_calls_server <- function(id, r){
           onclick="onRemoveCallFromGroupBtnClick(this)"
           )),
         tags$th(scope="row", call_group$frontend_row_ids[[i]]),
-        tags$td(call_group$backend_rows$mic_id[[i]]),
-        tags$td(call_group$backend_rows$toa[[i]]),
-        tags$td(call_group$backend_rows$sex[[i]])
+        !!!cells
       )
     }
     #golem::print_dev(rows)
@@ -277,10 +291,11 @@ mod_match_calls_server <- function(id, r){
   }
 
   #' Each time the call_groups list changes
-  #' Re-render the accordion containing tables of grouped calls
+    #' Re-render the accordion containing tables of grouped calls
     observeEvent(r$call_groups, {
       panels <- list()
       rows_to_hide <- c()
+      display_cols <- group_display_cols()
       for (i in seq_along(r$call_groups)) {
         call_group <- r$call_groups[[i]]
         rows_to_hide <- c(rows_to_hide, call_group$frontend_row_ids)
@@ -291,12 +306,10 @@ mod_match_calls_server <- function(id, r){
             tags$thead(tags$tr(
               tags$th(scope="col", ""),
               tags$th(scope="col", "row id"),
-              tags$th(scope="col", "mic id"),
-              tags$th(scope="col", "toa"),
-              tags$th(scope="col", "sex")
+              lapply(display_cols, function(col) tags$th(scope="col", col))
             )
             ),
-            tags$tbody(!!!generate_rows(call_group))
+            tags$tbody(!!!generate_rows(call_group, display_cols))
         )
         )
       }

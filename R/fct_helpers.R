@@ -44,14 +44,28 @@ read_csv_vroom <- function(datapath, ...) {
 #' @importFrom dplyr mutate group_by summarise n rename select arrange
 #' @importFrom lubridate ymd_hms date stamp
 
-parse_rec_data <- function(recordings) {
+parse_rec_data <- function(recordings, extra_cols = NULL) {
+  required_cols <- c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "spectrogram")
+  missing_required <- setdiff(required_cols, names(recordings))
+  if (length(missing_required) > 0) {
+    stop(paste("Missing required column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  selected_extra <- intersect(if (is.null(extra_cols)) character(0) else extra_cols, names(recordings))
+  selected_cols <- unique(c(required_cols, selected_extra))
+
   recordings %>%
-    #which columns to select
-    select(c(recording_ID, mic_ID, GPSDatetime2, measured_bearing, measured_gender, spectrogram)) %>%
-    # rename columns to standard format
-    rename(rec_id = recording_ID, mic_id = mic_ID, toa = GPSDatetime2, bearing = measured_bearing, sex = measured_gender) %>%
-    # parse toa as date object
-    mutate(toa = ymd_hms(toa, tz="UTC")) %>%
+    # Keep required columns plus any extras the user opted in to show later
+    select(all_of(selected_cols)) %>%
+    # standardise column names used internally while keeping the originals
+    mutate(
+      rec_id = recording_ID,
+      mic_id = mic_ID,
+      toa = ymd_hms(GPSDatetime2, tz="UTC"),
+      bearing = measured_bearing,
+      sex = measured_gender,
+      suspect_bearing = FALSE
+    ) %>%
     # order by toa ascending
     arrange(toa)
 }
