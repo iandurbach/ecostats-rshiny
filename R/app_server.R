@@ -11,6 +11,8 @@ app_server <- function(input, output, session) {
     recData = NULL,
     selectedRecColumns = character(0), # columns from recordings csv to show in the main table
     recDataAbsFilePath = NULL, # the absolute file path of the selected recordings csv
+    spectroBasePath = NULL, # base path containing spectrogram files
+    spectroTempDir = NULL, # temp dir for unzipped spectrograms to clean up on session end
     recParsedData = NULL,
     frontendData = NULL,
     arrows_state = NULL,

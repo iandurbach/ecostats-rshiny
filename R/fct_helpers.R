@@ -37,12 +37,83 @@ read_csv_vroom <- function(datapath, ...) {
 #' and count how many calls exist per day. This allows to quickly pick a day of calls they
 #' would like to work on.
 #'
+#' @param x Character vector of datetimes to parse.
+#' @param tz Timezone to assign to the parsed datetimes.
+#' @returns parsed POSIXct vector.
+#' @noRd
+parse_datetime_column <- function(x, tz = "UTC") {
+  raw_values <- trimws(as.character(x))
+  non_missing <- !(is.na(raw_values) | raw_values == "")
+  values <- raw_values[non_missing]
+
+  if (length(values) == 0) {
+    stop("Datetime column is empty.")
+  }
+
+  formats <- c(
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y/%m/%d %H:%M:%S",
+    "%Y/%m/%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+    "%d/%m/%Y %H:%M:%S",
+    "%d/%m/%Y %H:%M",
+    "%m/%d/%Y %H:%M:%S",
+    "%m/%d/%Y %H:%M"
+  )
+
+  successful_formats <- character(0)
+  successful_parses <- list()
+
+  for (fmt in formats) {
+    parsed <- as.POSIXct(strptime(values, format = fmt, tz = tz))
+    if (all(!is.na(parsed))) {
+      successful_formats <- c(successful_formats, fmt)
+      successful_parses[[fmt]] <- parsed
+    }
+  }
+
+  if (length(successful_formats) == 0) {
+    stop(
+      paste0(
+        "Could not parse GPSDatetime2. Supported formats are: ",
+        paste(formats, collapse = ", ")
+      )
+    )
+  }
+
+  if (length(successful_formats) > 1) {
+    first_parse <- successful_parses[[successful_formats[[1]]]]
+    equivalent_formats <- vapply(
+      successful_formats,
+      function(fmt) identical(unclass(successful_parses[[fmt]]), unclass(first_parse)),
+      logical(1)
+    )
+
+    if (!all(equivalent_formats)) {
+      stop(
+        paste0(
+          "Ambiguous datetime format in GPSDatetime2. Multiple formats matched: ",
+          paste(successful_formats, collapse = ", "),
+          ". Please use an unambiguous datetime format."
+        )
+      )
+    }
+  }
+
+  parsed_all <- as.POSIXct(rep(NA_real_, length(raw_values)), origin = "1970-01-01", tz = tz)
+  parsed_all[non_missing] <- successful_parses[[successful_formats[[1]]]]
+  parsed_all
+}
+
+#'
 #' @param recordings A tibble containing the recorded calls read from a csv.
 #' @returns standardised recordings data with parsed time of arrival as datetime object.
 #' @noRd
 #'
 #' @importFrom dplyr mutate group_by summarise n rename select arrange
-#' @importFrom lubridate ymd_hms date stamp
+#' @importFrom lubridate date stamp
 
 parse_rec_data <- function(recordings, extra_cols = NULL) {
   required_cols <- c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "spectrogram")
@@ -61,7 +132,7 @@ parse_rec_data <- function(recordings, extra_cols = NULL) {
     mutate(
       rec_id = recording_ID,
       mic_id = mic_ID,
-      toa = ymd_hms(GPSDatetime2, tz="UTC"),
+      toa = parse_datetime_column(GPSDatetime2, tz = "UTC"),
       bearing = measured_bearing,
       sex = measured_gender,
       suspect_bearing = FALSE

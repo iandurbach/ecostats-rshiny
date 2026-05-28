@@ -191,19 +191,15 @@ mod_match_calls_server <- function(id, r){
           # Filter backend datatable by record ID
           backendRow <- filter(r$recParsedData, rec_id == backendRecID)
 
-          #Get relative path of spectrogram from backend
-          spectroRelativePath <- path(backendRow$spectrogram)
+          spectro_filename <- backendRow$spectrogram
 
-          # Get the absolute path to the image according to csv file path provided by shinyFiles
-          if(is.null(r$recDataAbsFilePath)) {
-            golem::invoke_js("erroralert", list(title="Failed to read file path", msg="The recordings csv file path was not provided."))
+          if(is.null(r$spectroBasePath)) {
+            golem::invoke_js("erroralert", list(title="Failed to read file path", msg="Spectrogram folder not set. Upload a ZIP or choose a folder."))
             break;
           }
           else {
-            # Construct an absolute path to the spectrogram image
-            # fs::path_real should make sure that this works both on UNIX and Windows and that the file exists
-            # If the file does not exist, throw error and break out of loop
-            spectroAbsPath <- attempt(path_real(path(path_dir(r$recDataAbsFilePath), spectroRelativePath)))
+            # Always read spectrograms from the configured spectrograms folder
+            spectroAbsPath <- attempt(path_real(path(r$spectroBasePath, spectro_filename)))
             if (is_try_error(spectroAbsPath)) {
               golem::invoke_js("erroralert", list(title="Failed to read file path", msg=spectroAbsPath))
               break;

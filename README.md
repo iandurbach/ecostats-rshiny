@@ -70,3 +70,12 @@ itself.
 4.  Follow steps 8, 9 from Option 1.
 
 *Note: The example data is not real.*
+
+## Development
+
+After making changes to the app:
+
+```r
+pkgload::load_all(".")
+vocomatcher::run_app()
+```
