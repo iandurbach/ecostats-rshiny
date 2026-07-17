@@ -13,6 +13,9 @@ app_server <- function(input, output, session) {
     recDataAbsFilePath = NULL, # the absolute file path of the selected recordings csv
     spectroBasePath = NULL, # base path containing spectrogram files
     spectroTempDir = NULL, # temp dir for unzipped spectrograms to clean up on session end
+    wavRootPath = NULL, # base folder containing recorder WAV subfolders
+    spectroCacheDir = NULL, # temp dir for generated spectrogram PNGs
+    inputMode = NULL, # "csv" or "database"
     recParsedData = NULL,
     frontendData = NULL,
     arrows_state = NULL,

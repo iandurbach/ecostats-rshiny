@@ -30,9 +30,10 @@ mod_match_calls_ui <- function(id) {
     ),
     fluidRow(
       #actionButton(ns("show_spectrograms2"), "Show spectrograms", class = "btn btn-info")
-      column(4, align="center", tags$button("Show spectrograms" ,id="show_spectrograms", class="btn btn-info")),
-      column(4, align="center", actionButton(ns("create_group2"), "Create new call group", class = "btn btn-primary")),
-      column(4, align="center", div(class="btn-group",
+      column(3, align="center", tags$button("Show spectrograms" ,id="show_spectrograms", class="btn btn-info")),
+      column(3, align="center", actionButton(ns("create_spectrograms"), "Create spectrograms", class = "btn btn-info")),
+      column(3, align="center", actionButton(ns("create_group2"), "Create new call group", class = "btn btn-primary")),
+      column(3, align="center", div(class="btn-group",
                                     actionButton(ns("add_to_group"), "Add", class = "btn btn-secondary btn-spacing"),
                                     selectInput(ns("existing_group"), "Add calls to existing group:", choices = NULL)
       )),
@@ -106,6 +107,61 @@ mod_match_calls_server <- function(id, r){
     # Call the bearings visualization module server and pass-in all reactive values
     mod_bearings_vis_server("bearings_vis_1", r)
 
+    encode_spectrogram_for_backend_row <- function(backendRow) {
+      uses_wav <- "wav_file" %in% names(backendRow) &&
+        length(backendRow$wav_file) > 0 &&
+        !is.na(backendRow$wav_file[[1]]) &&
+        nzchar(backendRow$wav_file[[1]])
+
+      if (uses_wav) {
+        if (is.null(r$wavRootPath)) {
+          stop("WAV root folder not set. Choose the folder containing recorder WAV subfolders.")
+        }
+        if (is.null(r$spectroCacheDir) || !dir.exists(r$spectroCacheDir)) {
+          r$spectroCacheDir <- file.path(tempdir(), paste0("spectro_cache_", session$token))
+          dir.create(r$spectroCacheDir, recursive = TRUE, showWarnings = FALSE)
+        }
+        spectroAbsPath <- ensure_spectrogram_png(backendRow, r$wavRootPath, r$spectroCacheDir)
+        return(encode_image(spectroAbsPath))
+      }
+
+      spectro_filename <- backendRow$spectrogram
+      if(is.null(r$spectroBasePath)) {
+        stop("Spectrogram folder not set. Upload a ZIP or choose a folder.")
+      }
+      spectroAbsPath <- path_real(path(r$spectroBasePath, spectro_filename))
+      encode_image(spectroAbsPath)
+    }
+
+    send_spectrogram_images <- function(frontend_row_ids) {
+      req(frontendData())
+      has_wav_rows <- "wav_file" %in% names(r$recParsedData) &&
+        any(!is.na(r$recParsedData$wav_file) & nzchar(r$recParsedData$wav_file))
+      if (has_wav_rows && is.null(r$wavRootPath)) {
+        golem::invoke_js("erroralert", list(
+          title="WAV folder not set",
+          msg="Choose the folder containing recorder WAV subfolders before creating spectrograms."
+        ))
+        return()
+      }
+      encodedImages <- list()
+      idx <- 1
+      for (i in frontend_row_ids) {
+        backendRecID <- frontendData() %>%
+          slice(i) %>%
+          pull(rec_id)
+        backendRow <- filter(r$recParsedData, rec_id == backendRecID)
+        b64data <- attempt(encode_spectrogram_for_backend_row(backendRow))
+        if (is_try_error(b64data)) {
+          golem::invoke_js("erroralert", list(title="Failed to create spectrogram", msg=b64data))
+          next
+        }
+        encodedImages[[idx]] <- list(rowId = i-1, src=b64data)
+        idx <- idx + 1
+      }
+      session$sendCustomMessage("updateTableSpectrogramImages", encodedImages)
+    }
+
     output$unmatched_calls <- renderDT({
       datatable(
         isolate(frontendData()),
@@ -177,44 +233,22 @@ mod_match_calls_server <- function(id, r){
     #  req(input$unmatched_calls_rows_current)
     observeEvent(input$unmatched_calls_rows_current, {
       req(frontendData())
+      send_spectrogram_images(input$unmatched_calls_rows_current)
+    })
 
-      # array of base64 images and the frontend row index they correspond to
-      encodedImages <- list()
-      idx <- 1
-      ## For each row that is visible on the current page of the table
-      for (i in input$unmatched_calls_rows_current) {
-          # Get row from backend using frontend row id.
-          backendRecID <- frontendData() %>%
-            slice(i) %>%
-            pull(rec_id)
-
-          # Filter backend datatable by record ID
-          backendRow <- filter(r$recParsedData, rec_id == backendRecID)
-
-          spectro_filename <- backendRow$spectrogram
-
-          if(is.null(r$spectroBasePath)) {
-            golem::invoke_js("erroralert", list(title="Failed to read file path", msg="Spectrogram folder not set. Upload a ZIP or choose a folder."))
-            break;
-          }
-          else {
-            # Always read spectrograms from the configured spectrograms folder
-            spectroAbsPath <- attempt(path_real(path(r$spectroBasePath, spectro_filename)))
-            if (is_try_error(spectroAbsPath)) {
-              golem::invoke_js("erroralert", list(title="Failed to read file path", msg=spectroAbsPath))
-              break;
-            }
-            ## Read the input image file and base64 encode it
-            b64data <- encode_image(spectroAbsPath)
-
-            #i minus one since array indexing in javascript begins at zero (like any other normal language!)
-            encodedImages[[idx]] <- list(rowId = i-1, src=b64data)
-
-            idx = idx + 1;
-          }
+    observeEvent(input$create_spectrograms, {
+      req(frontendData(), r$recParsedData, input$datetime_slider)
+      current_frontend <- frontendData()
+      visible_ids <- which(
+        as.POSIXct(current_frontend$toa, tz = "UTC") >= input$datetime_slider[[1]] &
+          as.POSIXct(current_frontend$toa, tz = "UTC") <= input$datetime_slider[[2]]
+      )
+      if (length(visible_ids) == 0) {
+        showNotification("No detections in the selected time interval.", type = "warning")
+        return()
       }
-      # Send JSON array to client of format [ {rowId: <num>, src: <base64string>} ]
-      session$sendCustomMessage("updateTableSpectrogramImages", encodedImages)
+      send_spectrogram_images(visible_ids)
+      showNotification(paste("Created or reused spectrograms for", length(visible_ids), "detections."), type = "message")
     })
 
 

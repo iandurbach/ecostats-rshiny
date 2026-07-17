@@ -42,6 +42,10 @@ arrow_color <- function(sex, suspect_bearing = FALSE) {
   else "red"
 }
 
+rec_id_from_arrow_layer_id <- function(layer_id) {
+  sub("^arrow_", "", as.character(layer_id))
+}
+
 
 #' bearings_vis Server Functions
 #'
@@ -141,11 +145,11 @@ mod_bearings_vis_server <- function(id, r){
       click <- input$map_shape_click
       req(click$id, r$recParsedData)
       # Expect layerId format "arrow_<rec_id>"
-      rec_id <- suppressWarnings(as.numeric(gsub("^arrow_", "", click$id)))
-      if (is.na(rec_id)) return()
+      rec_id <- rec_id_from_arrow_layer_id(click$id)
+      if (is.na(rec_id) || !nzchar(rec_id)) return()
 
       updated <- r$recParsedData %>%
-        mutate(suspect_bearing = if_else(rec_id == !!rec_id, !suspect_bearing, suspect_bearing))
+        mutate(suspect_bearing = if_else(as.character(rec_id) == !!rec_id, !suspect_bearing, suspect_bearing))
       r$recParsedData <- updated
 
       # Refresh arrows for current selection to update colors

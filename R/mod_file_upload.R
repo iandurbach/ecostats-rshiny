@@ -30,6 +30,17 @@ mod_file_upload_ui <- function(id){
             title="Select CSV file"))
         ),
         fluidRow(
+          column(6, shinyFilesButton(
+            id=ns("databases"),
+            label="Select detection SQLite database(s)",
+            multiple = TRUE,
+            title="Select SQLite database files")),
+          column(6, shinyFiles::shinyDirButton(
+            id=ns("wav_root"),
+            label="Select WAV root folder",
+            title="Select WAV root folder"))
+        ),
+        fluidRow(
           column(6, shinyFiles::shinyDirButton(
             id=ns("spectro_dir"),
             label="Select folder containing spectrograms",
@@ -82,7 +93,17 @@ mod_file_upload_ui <- function(id){
 #' @importFrom attempt attempt is_try_error try_catch
 #' @importFrom shinyFiles shinyFileChoose shinyDirChoose getVolumes parseFilePaths
 #' @importFrom fs path_home
-mod_file_upload_server <- function(id, r){
+mod_file_upload_server <- function(id, r = reactiveValues(
+  micData = NULL,
+  recData = NULL,
+  selectedRecColumns = character(0),
+  recDataAbsFilePath = NULL,
+  spectroBasePath = NULL,
+  spectroTempDir = NULL,
+  wavRootPath = NULL,
+  spectroCacheDir = NULL,
+  inputMode = NULL
+)){
   moduleServer( id, function(input, output, session){
     ns <- session$ns
     is_upload_mode <- isTRUE(getOption("vocomatcher.force_upload_mode")) ||
@@ -93,8 +114,10 @@ mod_file_upload_server <- function(id, r){
     if (!is_upload_mode) {
       shinyFileChoose(input, "microphones", session = session, roots = volumes, filetypes = c("csv"))
       shinyFileChoose(input, "recordings", session = session, roots = volumes, filetypes = c("csv"))
+      shinyFileChoose(input, "databases", session = session, roots = volumes, filetypes = c("sqlite3"))
       shinyFileChoose(input, "spectro_zip", session = session, roots = volumes, filetypes = c("zip"))
       shinyFiles::shinyDirChoose(input, "spectro_dir", session = session, roots = volumes, allowDirCreate = FALSE)
+      shinyFiles::shinyDirChoose(input, "wav_root", session = session, roots = volumes, allowDirCreate = FALSE)
     }
 
     observeEvent(input$microphones, {
@@ -130,9 +153,10 @@ mod_file_upload_server <- function(id, r){
       } else {
         output$tblRecs <- renderTable(head(recData))
         # Insert the recordings data to the reactive values
-        r$recData <- recData
-        # Reset selected columns each time a new recordings file is loaded
-        r$selectedRecColumns <- intersect(required_cols, names(recData))
+          r$recData <- recData
+          r$inputMode <- "csv"
+          # Reset selected columns each time a new recordings file is loaded
+          r$selectedRecColumns <- intersect(required_cols, names(recData))
         # Save the absolute file path of the loaded recordings csv
         r$recDataAbsFilePath <- f$datapath
       }
@@ -146,9 +170,47 @@ mod_file_upload_server <- function(id, r){
       } else {
         output$tblRecs <- renderTable(head(recData))
         r$recData <- recData
+        r$inputMode <- "csv"
         r$selectedRecColumns <- intersect(required_cols, names(recData))
         # when uploading, use temp path as base for spectros by default
         r$recDataAbsFilePath <- input$recordings_upload$datapath
+      }
+    })
+
+    observeEvent(input$databases, {
+      req(!is.integer(input$databases))
+      f <- parseFilePaths(volumes, input$databases)
+      db_paths <- f$datapath
+      dbData <- attempt(read_detection_databases(db_paths, offset_sign = 1))
+      if(is_try_error(dbData)) {
+        golem::invoke_js("erroralert", list(title="Database read error!", msg=dbData))
+      } else {
+        r$micData <- dbData$micData
+        r$recData <- dbData$recData
+        r$inputMode <- "database"
+        r$selectedRecColumns <- intersect(
+          c("cluster_id", "clock_offset", "raw_toa", "Duration", "wav_file"),
+          names(dbData$recData)
+        )
+        if (is.null(r$spectroCacheDir) || !dir.exists(r$spectroCacheDir)) {
+          r$spectroCacheDir <- file.path(tempdir(), paste0("spectro_cache_", session$token))
+          dir.create(r$spectroCacheDir, recursive = TRUE, showWarnings = FALSE)
+        }
+        output$tblMics <- renderTable(head(dbData$micData))
+        output$tblRecs <- renderTable(head(dbData$recData))
+        showNotification(paste("Loaded", nrow(dbData$recData), "detections from", length(db_paths), "database(s)."), type = "message")
+      }
+    })
+
+    observeEvent(input$wav_root, {
+      req(!is.null(input$wav_root))
+      if (is.integer(input$wav_root)) return()
+      dir_path <- shinyFiles::parseDirPath(volumes, input$wav_root)
+      if (length(dir_path) == 0 || is.na(dir_path)) {
+        golem::invoke_js("erroralert", list(title="WAV folder error!", msg="Could not read folder path."))
+      } else {
+        r$wavRootPath <- dir_path
+        showNotification(paste("Using WAV files from", dir_path), type = "message")
       }
     })
 
@@ -255,6 +317,10 @@ mod_file_upload_server <- function(id, r){
       td <- isolate(r$spectroTempDir)
       if (!is.null(td) && dir.exists(td)) {
         unlink(td, recursive = TRUE, force = TRUE)
+      }
+      cd <- isolate(r$spectroCacheDir)
+      if (!is.null(cd) && dir.exists(cd)) {
+        unlink(cd, recursive = TRUE, force = TRUE)
       }
     })
   })

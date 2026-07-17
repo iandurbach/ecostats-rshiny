@@ -33,7 +33,16 @@ checkboxColumn <- function(len) {
 #' @importFrom base64enc base64encode
 #' @noRd
 encode_image <- function(img_path) {
-  data_uri <- paste0("data:image/png;base64,", base64encode(img_path))
+  ext <- tolower(tools::file_ext(img_path))
+  mime <- switch(
+    ext,
+    jpg = "image/jpeg",
+    jpeg = "image/jpeg",
+    png = "image/png",
+    gif = "image/gif",
+    "image/png"
+  )
+  data_uri <- paste0("data:", mime, ";base64,", base64encode(img_path))
   return(data_uri)
 }
 

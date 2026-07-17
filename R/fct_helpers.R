@@ -51,17 +51,27 @@ parse_datetime_column <- function(x, tz = "UTC") {
   }
 
   formats <- c(
+    "%Y-%m-%d %H:%M:%OS",
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
+    "%Y/%m/%d %H:%M:%OS",
     "%Y/%m/%d %H:%M:%S",
     "%Y/%m/%d %H:%M",
+    "%Y-%m-%dT%H:%M:%OS",
     "%Y-%m-%dT%H:%M:%S",
     "%Y-%m-%dT%H:%M",
+    "%d/%m/%Y %H:%M:%OS",
     "%d/%m/%Y %H:%M:%S",
     "%d/%m/%Y %H:%M",
+    "%m/%d/%Y %H:%M:%OS",
     "%m/%d/%Y %H:%M:%S",
     "%m/%d/%Y %H:%M"
   )
+
+  has_fractional_seconds <- grepl(":\\d{2}\\.\\d+$", values)
+  if (any(has_fractional_seconds)) {
+    formats <- formats[grepl("%OS", formats, fixed = TRUE)]
+  }
 
   successful_formats <- character(0)
   successful_parses <- list()
@@ -107,6 +117,14 @@ parse_datetime_column <- function(x, tz = "UTC") {
   parsed_all
 }
 
+make_internal_rec_ids <- function(recording_ids) {
+  ids <- as.character(recording_ids)
+  if (anyDuplicated(ids)) {
+    ids <- make.unique(ids, sep = "_")
+  }
+  ids
+}
+
 #'
 #' @param recordings A tibble containing the recorded calls read from a csv.
 #' @returns standardised recordings data with parsed time of arrival as datetime object.
@@ -123,14 +141,23 @@ parse_rec_data <- function(recordings, extra_cols = NULL) {
   }
 
   selected_extra <- intersect(if (is.null(extra_cols)) character(0) else extra_cols, names(recordings))
-  selected_cols <- unique(c(required_cols, selected_extra))
+  backend_cols <- intersect(
+    c(
+      "database_path", "detection_table", "detection_id", "cluster_id", "raw_toa",
+      "clock_offset", "Duration", "relative_bearing_rad", "vertical_bearing_rad",
+      "recorder_heading", "wav_file", "recording_start_utc", "recording_stop_utc",
+      "samples", "sample_rate", "start_frame", "end_frame"
+    ),
+    names(recordings)
+  )
+  selected_cols <- unique(c(required_cols, selected_extra, backend_cols))
 
   recordings %>%
     # Keep required columns plus any extras the user opted in to show later
     select(all_of(selected_cols)) %>%
     # standardise column names used internally while keeping the originals
     mutate(
-      rec_id = recording_ID,
+      rec_id = make_internal_rec_ids(recording_ID),
       mic_id = mic_ID,
       toa = parse_datetime_column(GPSDatetime2, tz = "UTC"),
       bearing = measured_bearing,
