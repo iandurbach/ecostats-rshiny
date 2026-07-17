@@ -30,6 +30,7 @@ Imports:
     tools
 Suggests: 
     knitr,
+    plotly,
     rmarkdown,
     testthat (>= 3.0.0)
 VignetteBuilder: 

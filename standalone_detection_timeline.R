@@ -220,39 +220,24 @@ server <- function(input, output, session) {
       return(tags$div("Box-select points to show spectrograms. Use the mode bar to switch back to pan when navigating."))
     }
 
+    img_path <- tryCatch(
+      ensure_comparison_spectrogram_png(rows, wav_root, spectro_cache_dir),
+      error = function(e) e
+    )
+    if (inherits(img_path, "error")) {
+      return(tags$div(
+        style = "margin: 10px 0; color: #9d1c1c;",
+        tags$strong("Could not create comparison spectrogram"),
+        tags$div(conditionMessage(img_path))
+      ))
+    }
+
     tags$div(
       tags$strong(paste(nrow(rows), "selected detection(s)")),
-      lapply(seq_len(nrow(rows)), function(i) {
-        row <- rows[i, , drop = FALSE]
-        img_path <- tryCatch(
-          ensure_spectrogram_png(row, wav_root, spectro_cache_dir),
-          error = function(e) e
-        )
-        if (inherits(img_path, "error")) {
-          return(tags$div(
-            style = "margin: 10px 0; color: #9d1c1c;",
-            tags$strong(row$rec_id[[1]]),
-            tags$div(conditionMessage(img_path))
-          ))
-        }
-
-        tags$div(
-          style = "margin: 10px 0 16px 0;",
-          tags$div(
-            style = "font-weight: 600;",
-            paste(
-              row$rec_id[[1]],
-              row$mic_id[[1]],
-              format(row$toa[[1]], "%H:%M:%S", tz = "UTC"),
-              sep = " | "
-            )
-          ),
-          tags$img(
-            src = encode_image(img_path),
-            style = "width: 100%; border: 1px solid #ddd;"
-          )
-        )
-      })
+      tags$img(
+        src = encode_image(img_path),
+        style = "width: 100%; margin-top: 8px; border: 1px solid #ddd;"
+      )
     )
   })
 

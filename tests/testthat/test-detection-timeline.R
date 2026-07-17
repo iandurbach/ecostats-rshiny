@@ -98,3 +98,50 @@ test_that("detections are assigned to real recording sessions", {
   expect_equal(mapped$recorder_lane, c(1, 2, 1))
   expect_equal(attr(mapped, "recorder_levels"), c("NCNX06a", "NCNX06b"))
 })
+
+test_that("spectrogram matrix dimensions match time and frequency axes", {
+  samples <- sin(seq(0, 8 * pi, length.out = 2048))
+
+  spectro <- compute_spectrogram_matrix(
+    samples,
+    sample_rate = 48000,
+    window_size = 512,
+    overlap = 0.5,
+    freq_min_hz = 100,
+    freq_max_hz = 8000
+  )
+
+  expect_equal(nrow(spectro$z), length(spectro$x_seconds))
+  expect_equal(ncol(spectro$z), length(spectro$y_khz))
+  expect_true(min(spectro$y_khz) >= 0.1)
+  expect_true(max(spectro$y_khz) <= 8)
+})
+
+test_that("comparison spectrogram renderer writes a combined PNG", {
+  comparison <- list(
+    pieces = list(
+      list(
+        x_seconds = c(0, 1, 2),
+        y_khz = c(0.5, 1, 1.5),
+        z = matrix(c(-80, -60, -40, -75, -55, -35, -70, -50, -30), nrow = 3),
+        mic_id = "NCNX06a"
+      ),
+      list(
+        x_seconds = c(1, 2, 3),
+        y_khz = c(0.5, 1, 1.5),
+        z = matrix(c(-78, -58, -38, -73, -53, -33, -68, -48, -28), nrow = 3),
+        mic_id = "NCNX06b"
+      )
+    ),
+    origin_time = as.POSIXct("2026-01-01 22:00:00", tz = "UTC"),
+    xlim = c(0, 3),
+    ylim = c(0.5, 1.5),
+    zlim = c(-80, -28)
+  )
+  out_path <- tempfile(fileext = ".png")
+
+  write_comparison_spectrogram_png(comparison, out_path, width = 500, row_height = 90)
+
+  expect_true(file.exists(out_path))
+  expect_gt(file.info(out_path)$size, 0)
+})
