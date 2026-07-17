@@ -57,3 +57,6 @@ rsconnect/
 inst/doc
 /doc/
 /Meta/
+
+# Figures etc
+*.png
