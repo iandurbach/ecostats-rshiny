@@ -145,3 +145,63 @@ test_that("comparison spectrogram renderer writes a combined PNG", {
   expect_true(file.exists(out_path))
   expect_gt(file.info(out_path)$size, 0)
 })
+
+test_that("comparison spectrogram renderer can overwrite one current PNG", {
+  make_comparison <- function(value) {
+    list(
+      pieces = list(
+        list(
+          x_seconds = c(0, 1, 2),
+          y_khz = c(0.5, 1, 1.5),
+          z = matrix(value + seq_len(9), nrow = 3),
+          mic_id = "NCNX06a"
+        )
+      ),
+      origin_time = as.POSIXct("2026-01-01 22:00:00", tz = "UTC"),
+      xlim = c(0, 2),
+      ylim = c(0.5, 1.5),
+      zlim = c(value + 1, value + 9)
+    )
+  }
+  out_path <- tempfile(fileext = ".png")
+
+  write_comparison_spectrogram_png(make_comparison(-90), out_path, width = 400, row_height = 80)
+  first_mtime <- file.info(out_path)$mtime
+  Sys.sleep(1)
+  write_comparison_spectrogram_png(make_comparison(-40), out_path, width = 400, row_height = 80)
+
+  expect_true(file.exists(out_path))
+  expect_gt(file.info(out_path)$mtime, first_mtime)
+})
+
+test_that("grouped and removed action rows have expected export columns", {
+  rows <- data.frame(
+    rec_id = c("NCNX06a_1", "NCNX06b_2"),
+    detection_id = c(1, 2),
+    mic_id = c("NCNX06a", "NCNX06b"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
+    Duration = c(4, 5)
+  )
+
+  grouped <- format_detection_action_rows(rows, notes = "same call", group_id = 1)
+  removed <- format_detection_action_rows(rows[1, , drop = FALSE], notes = "noise")
+
+  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes"))
+  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes"))
+  expect_equal(grouped$group_ID, c(1L, 1L))
+  expect_equal(grouped$detection_ID, c("1", "2"))
+  expect_equal(grouped$recorder_ID, c("NCNX06a", "NCNX06b"))
+  expect_equal(grouped$detection_end_time, rows$toa + rows$Duration)
+  expect_equal(removed$Notes, "noise")
+})
+
+test_that("click selection toggles detection ids", {
+  selected <- character(0)
+
+  selected <- toggle_rec_id_selection(selected, "a")
+  selected <- toggle_rec_id_selection(selected, "b")
+  selected <- toggle_rec_id_selection(selected, "a")
+
+  expect_equal(selected, "b")
+  expect_equal(toggle_rec_id_selection(selected, NA_character_), "b")
+})

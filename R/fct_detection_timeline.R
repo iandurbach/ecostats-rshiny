@@ -165,7 +165,11 @@ prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, 
     stop(paste("Selected rows are missing column(s):", paste(missing_required, collapse = ", ")))
   }
 
-  rows <- rows[order(rows$raw_toa, rows$mic_id), , drop = FALSE]
+  if ("recorder_lane" %in% names(rows)) {
+    rows <- rows[order(-rows$recorder_lane, rows$raw_toa), , drop = FALSE]
+  } else {
+    rows <- rows[order(rows$mic_id, rows$raw_toa, decreasing = TRUE), , drop = FALSE]
+  }
   origin_time <- min(rows$raw_toa, na.rm = TRUE)
   pieces <- lapply(seq_len(nrow(rows)), function(i) {
     row <- rows[i, , drop = FALSE]
@@ -203,7 +207,7 @@ prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, 
 comparison_spectrogram_cache_path <- function(rows, cache_dir) {
   key <- paste(rows$rec_id[order(rows$rec_id)], collapse = "_")
   key <- gsub("[^A-Za-z0-9_]+", "_", key)
-  file.path(cache_dir, paste0("comparison_", key, "_v1.png"))
+  file.path(cache_dir, paste0("comparison_", key, "_v2.png"))
 }
 
 write_comparison_spectrogram_png <- function(comparison, out_path, width = 900, row_height = 150) {
@@ -219,7 +223,9 @@ write_comparison_spectrogram_png <- function(comparison, out_path, width = 900, 
     mfrow = c(n, 1),
     mar = c(0.4, 4.8, 0.2, 0.8),
     oma = c(3.6, 0, 0.2, 0),
-    bg = "grey82"
+    bg = "grey82",
+    cex.axis = 1.25,
+    cex.lab = 1.35
   )
 
   for (i in seq_along(pieces)) {
@@ -235,18 +241,31 @@ write_comparison_spectrogram_png <- function(comparison, out_path, width = 900, 
       col = hcl.colors(128, "Inferno"),
       xlab = "",
       ylab = piece$mic_id,
-      xaxt = if (i == n) "s" else "n",
+      xaxt = "n",
       yaxt = "s",
+      cex.axis = 1.25,
+      cex.lab = 1.35,
       useRaster = TRUE
     )
     graphics::box()
   }
 
+  axis_at <- graphics::axTicks(1)
+  axis_at <- axis_at[axis_at >= comparison$xlim[[1]] & axis_at <= comparison$xlim[[2]]]
+  graphics::axis(
+    side = 1,
+    at = axis_at,
+    labels = format(comparison$origin_time + axis_at, "%H:%M:%S", tz = "UTC"),
+    outer = TRUE,
+    line = 0,
+    cex.axis = 1.25
+  )
   graphics::mtext(
-    paste0("Seconds since ", format(comparison$origin_time, "%H:%M:%S", tz = "UTC")),
+    "Time (UTC)",
     side = 1,
     outer = TRUE,
-    line = 2.2
+    line = 2.2,
+    cex = 1.35
   )
   invisible(out_path)
 }
@@ -257,4 +276,78 @@ ensure_comparison_spectrogram_png <- function(rows, wav_root, cache_dir) {
   comparison <- prepare_comparison_spectrograms(rows, wav_root)
   write_comparison_spectrogram_png(comparison, out_path)
   out_path
+}
+
+write_current_comparison_spectrogram_png <- function(rows, wav_root, cache_dir, filename = "current_comparison.png") {
+  out_path <- file.path(cache_dir, filename)
+  comparison <- prepare_comparison_spectrograms(rows, wav_root)
+  write_comparison_spectrogram_png(comparison, out_path)
+  out_path
+}
+
+empty_grouped_detections <- function() {
+  data.frame(
+    group_ID = integer(0),
+    detection_ID = character(0),
+    recorder_ID = character(0),
+    detection_start_time = as.POSIXct(character(0), tz = "UTC"),
+    detection_end_time = as.POSIXct(character(0), tz = "UTC"),
+    Notes = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+empty_removed_detections <- function() {
+  data.frame(
+    detection_ID = character(0),
+    recorder_ID = character(0),
+    detection_start_time = as.POSIXct(character(0), tz = "UTC"),
+    detection_end_time = as.POSIXct(character(0), tz = "UTC"),
+    Notes = character(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+format_detection_action_rows <- function(rows, notes = "", group_id = NULL) {
+  if (nrow(rows) == 0) {
+    if (is.null(group_id)) return(empty_removed_detections())
+    return(empty_grouped_detections())
+  }
+  required <- c("mic_id", "toa", "Duration")
+  missing_required <- setdiff(required, names(rows))
+  if (length(missing_required) > 0) {
+    stop(paste("Selected rows are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  detection_ids <- if ("detection_id" %in% names(rows)) rows$detection_id else rows$rec_id
+  out <- data.frame(
+    detection_ID = as.character(detection_ids),
+    recorder_ID = as.character(rows$mic_id),
+    detection_start_time = rows$toa,
+    detection_end_time = rows$toa + suppressWarnings(as.numeric(rows$Duration)),
+    Notes = rep(as.character(notes %||% ""), nrow(rows)),
+    stringsAsFactors = FALSE
+  )
+  if (!is.null(group_id)) {
+    out <- data.frame(group_ID = rep(as.integer(group_id), nrow(out)), out, stringsAsFactors = FALSE)
+  }
+  out
+}
+
+`%||%` <- function(x, y) {
+  if (is.null(x)) y else x
+}
+
+toggle_rec_id_selection <- function(current, clicked) {
+  current <- unique(as.character(current))
+  clicked <- as.character(clicked)
+  if (length(clicked) == 0 || is.na(clicked[[1]]) || !nzchar(clicked[[1]])) {
+    return(current)
+  }
+  clicked <- clicked[[1]]
+  if (clicked %in% current) {
+    setdiff(current, clicked)
+  } else {
+    c(current, clicked)
+  }
 }
