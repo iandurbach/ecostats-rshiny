@@ -481,7 +481,7 @@ server <- function(input, output, session) {
     dat$status <- detection_point_status(dat$rec_id, group_membership(), removed_membership())
     dat$selected_color <- ifelse(
       dat$status == "grouped",
-      "rgba(144,238,144,0.2)",
+      "rgba(144,238,144,0.5)",
       ifelse(dat$status == "removed", "rgba(128,128,128,0.1)", "#d7191c")
     )
     action_selected <- action_selected_rec_ids()
@@ -489,10 +489,6 @@ server <- function(input, output, session) {
     dat_active <- dat[dat$status == "active" & !dat$rec_id %in% action_selected, , drop = FALSE]
     dat_grouped <- dat[dat$status == "grouped" & !dat$rec_id %in% action_selected, , drop = FALSE]
     dat_removed <- dat[dat$status == "removed" & !dat$rec_id %in% action_selected, , drop = FALSE]
-    plot_title <- paste0(
-      "Detection timeline | ",
-      format(row$real_start[[1]], "%Y-%m-%d", tz = "UTC")
-    )
     x_range <- isolate(current_x_range())
     if (is.null(x_range)) {
       x_range <- list(row$real_start[[1]], row$real_stop[[1]])
@@ -539,7 +535,7 @@ server <- function(input, output, session) {
           key = ~rec_id,
           text = ~paste0(rec_id, "<br>", mic_id, "<br>", format(toa, "%H:%M:%S", tz = "UTC")),
           hoverinfo = "text",
-          marker = list(size = 12, color = "rgba(144,238,144,0.2)"),
+          marker = list(size = 12, color = "rgba(144,238,144,0.5)"),
           showlegend = FALSE
         )
     }
@@ -559,7 +555,6 @@ server <- function(input, output, session) {
 
     p %>%
       plotly::layout(
-        title = list(text = plot_title),
         dragmode = "select",
         uirevision = row$session_id[[1]],
         xaxis = list(
@@ -868,7 +863,7 @@ server <- function(input, output, session) {
   output$selected_spectrograms <- renderUI({
     rows <- selected_rows()
     if (nrow(rows) == 0) {
-      return(tags$div("Box-select points to show spectrograms. Use the mode bar to switch back to pan when navigating."))
+      return(NULL)
     }
 
     img_path <- tryCatch(
