@@ -293,6 +293,7 @@ empty_grouped_detections <- function() {
     detection_start_time = as.POSIXct(character(0), tz = "UTC"),
     detection_end_time = as.POSIXct(character(0), tz = "UTC"),
     Notes = character(0),
+    suspect_bearing = logical(0),
     stringsAsFactors = FALSE
   )
 }
@@ -304,6 +305,26 @@ empty_removed_detections <- function() {
     detection_start_time = as.POSIXct(character(0), tz = "UTC"),
     detection_end_time = as.POSIXct(character(0), tz = "UTC"),
     Notes = character(0),
+    suspect_bearing = logical(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+empty_group_membership <- function() {
+  data.frame(
+    group_ID = integer(0),
+    rec_id = character(0),
+    Notes = character(0),
+    suspect_bearing = logical(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+empty_removed_membership <- function() {
+  data.frame(
+    rec_id = character(0),
+    Notes = character(0),
+    suspect_bearing = logical(0),
     stringsAsFactors = FALSE
   )
 }
@@ -326,12 +347,194 @@ format_detection_action_rows <- function(rows, notes = "", group_id = NULL) {
     detection_start_time = rows$toa,
     detection_end_time = rows$toa + suppressWarnings(as.numeric(rows$Duration)),
     Notes = rep(as.character(notes %||% ""), nrow(rows)),
+    suspect_bearing = if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else rep(FALSE, nrow(rows)),
     stringsAsFactors = FALSE
   )
   if (!is.null(group_id)) {
     out <- data.frame(group_ID = rep(as.integer(group_id), nrow(out)), out, stringsAsFactors = FALSE)
   }
   out
+}
+
+format_group_membership_rows <- function(rows, notes = "", group_id) {
+  if (nrow(rows) == 0) return(empty_group_membership())
+  data.frame(
+    group_ID = rep(as.integer(group_id), nrow(rows)),
+    rec_id = as.character(rows$rec_id),
+    Notes = rep(as.character(notes %||% ""), nrow(rows)),
+    suspect_bearing = if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else rep(FALSE, nrow(rows)),
+    stringsAsFactors = FALSE
+  )
+}
+
+format_removed_membership_rows <- function(rows, notes = "") {
+  if (nrow(rows) == 0) return(empty_removed_membership())
+  data.frame(
+    rec_id = as.character(rows$rec_id),
+    Notes = rep(as.character(notes %||% ""), nrow(rows)),
+    suspect_bearing = if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else rep(FALSE, nrow(rows)),
+    stringsAsFactors = FALSE
+  )
+}
+
+export_grouped_detections <- function(group_membership, timeline_data) {
+  if (nrow(group_membership) == 0) return(empty_grouped_detections())
+  pieces <- lapply(seq_len(nrow(group_membership)), function(i) {
+    member <- group_membership[i, , drop = FALSE]
+    rows <- timeline_data[timeline_data$rec_id %in% member$rec_id, , drop = FALSE]
+    rows$suspect_bearing <- member$suspect_bearing
+    format_detection_action_rows(rows, notes = member$Notes, group_id = member$group_ID)
+  })
+  dplyr::bind_rows(pieces)
+}
+
+export_removed_detections <- function(removed_membership, timeline_data) {
+  if (nrow(removed_membership) == 0) return(empty_removed_detections())
+  pieces <- lapply(seq_len(nrow(removed_membership)), function(i) {
+    member <- removed_membership[i, , drop = FALSE]
+    rows <- timeline_data[timeline_data$rec_id %in% member$rec_id, , drop = FALSE]
+    rows$suspect_bearing <- member$suspect_bearing
+    format_detection_action_rows(rows, notes = member$Notes)
+  })
+  dplyr::bind_rows(pieces)
+}
+
+empty_suspect_bearing_state <- function() {
+  data.frame(
+    rec_id = character(0),
+    suspect_bearing = logical(0),
+    stringsAsFactors = FALSE
+  )
+}
+
+suspect_bearing_for_rec_ids <- function(rec_ids, state, default = FALSE) {
+  rec_ids <- as.character(rec_ids)
+  if (length(default) == length(rec_ids)) {
+    out <- as.logical(default)
+  } else {
+    default_value <- if (length(default) == 0) FALSE else as.logical(default[[1]])
+    out <- rep(default_value, length(rec_ids))
+  }
+  if (length(rec_ids) == 0 || is.null(state) || nrow(state) == 0) return(as.logical(out))
+  idx <- match(rec_ids, state$rec_id)
+  matched <- !is.na(idx)
+  out[matched] <- state$suspect_bearing[idx[matched]]
+  as.logical(out)
+}
+
+apply_suspect_bearing_state <- function(rows, state) {
+  if (nrow(rows) == 0) return(rows)
+  default <- if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else FALSE
+  rows$suspect_bearing <- suspect_bearing_for_rec_ids(rows$rec_id, state, default = default)
+  rows
+}
+
+toggle_suspect_bearing_state <- function(state, rec_id) {
+  rec_id <- as.character(rec_id)
+  if (length(rec_id) == 0 || is.na(rec_id[[1]]) || !nzchar(rec_id[[1]])) return(state)
+  rec_id <- rec_id[[1]]
+  if (is.null(state) || nrow(state) == 0) {
+    return(data.frame(rec_id = rec_id, suspect_bearing = TRUE, stringsAsFactors = FALSE))
+  }
+  state <- state[!duplicated(state$rec_id), , drop = FALSE]
+  idx <- match(rec_id, state$rec_id)
+  if (is.na(idx)) {
+    return(rbind(state, data.frame(rec_id = rec_id, suspect_bearing = TRUE, stringsAsFactors = FALSE)))
+  }
+  state$suspect_bearing[[idx]] <- !isTRUE(state$suspect_bearing[[idx]])
+  state
+}
+
+bearing_arrow_color <- function(suspect_bearing = FALSE) {
+  ifelse(isTRUE(suspect_bearing), "grey", "red")
+}
+
+bearing_rec_id_from_layer_id <- function(layer_id) {
+  sub("^arrow_", "", as.character(layer_id))
+}
+
+prepare_bearing_arrows <- function(rows, mic_data, suspect_state = empty_suspect_bearing_state(), distance_m = 500) {
+  if (nrow(rows) == 0) {
+    return(data.frame(
+      rec_id = character(0),
+      mic_id = character(0),
+      bearing = numeric(0),
+      suspect_bearing = logical(0),
+      lat = numeric(0),
+      lng = numeric(0),
+      arrow_lat = numeric(0),
+      arrow_lng = numeric(0),
+      color = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  required_rows <- c("rec_id", "mic_id", "bearing")
+  required_mics <- c("mic_id", "lat", "lng")
+  missing_rows <- setdiff(required_rows, names(rows))
+  missing_mics <- setdiff(required_mics, names(mic_data))
+  if (length(missing_rows) > 0) stop(paste("Selected rows are missing column(s):", paste(missing_rows, collapse = ", ")))
+  if (length(missing_mics) > 0) stop(paste("Mic data are missing column(s):", paste(missing_mics, collapse = ", ")))
+
+  rows <- apply_suspect_bearing_state(rows, suspect_state)
+  mic_data <- unique(mic_data[required_mics])
+  joined <- dplyr::left_join(rows, mic_data, by = "mic_id")
+  joined <- joined[
+    !is.na(joined$lat) & !is.na(joined$lng) & !is.na(joined$bearing),
+    ,
+    drop = FALSE
+  ]
+  if (nrow(joined) == 0) return(prepare_bearing_arrows(rows[FALSE, , drop = FALSE], mic_data, suspect_state, distance_m))
+
+  endpoints <- lapply(seq_len(nrow(joined)), function(i) {
+    point <- geosphere::destPoint(
+      p = c(joined$lng[[i]], joined$lat[[i]]),
+      b = joined$bearing[[i]],
+      d = distance_m
+    )
+    data.frame(arrow_lng = point[1, 1], arrow_lat = point[1, 2])
+  })
+  endpoint_df <- dplyr::bind_rows(endpoints)
+  joined$arrow_lng <- endpoint_df$arrow_lng
+  joined$arrow_lat <- endpoint_df$arrow_lat
+  joined$color <- vapply(joined$suspect_bearing, bearing_arrow_color, character(1))
+  joined
+}
+
+detection_point_status <- function(rec_ids, group_membership, removed_membership) {
+  rec_ids <- as.character(rec_ids)
+  status <- rep("active", length(rec_ids))
+  status[rec_ids %in% group_membership$rec_id] <- "grouped"
+  status[rec_ids %in% removed_membership$rec_id] <- "removed"
+  status
+}
+
+selected_group_ids <- function(rec_ids, group_membership) {
+  ids <- unique(group_membership$group_ID[group_membership$rec_id %in% rec_ids])
+  ids[order(ids)]
+}
+
+group_review_range <- function(rows, session_row, min_window_seconds = 30, padding_seconds = 10, padding_fraction = 0.2) {
+  if (nrow(rows) == 0) {
+    return(list(session_row$real_start[[1]], session_row$real_stop[[1]]))
+  }
+
+  start_time <- min(rows$toa, na.rm = TRUE)
+  stop_time <- max(rows$toa, na.rm = TRUE)
+  span <- as.numeric(difftime(stop_time, start_time, units = "secs"))
+  if (!is.finite(span) || span < min_window_seconds) {
+    midpoint <- start_time + span / 2
+    start_time <- midpoint - min_window_seconds / 2
+    stop_time <- midpoint + min_window_seconds / 2
+  } else {
+    padding <- max(padding_seconds, span * padding_fraction)
+    start_time <- start_time - padding
+    stop_time <- stop_time + padding
+  }
+
+  list(
+    max(start_time, session_row$real_start[[1]]),
+    min(stop_time, session_row$real_stop[[1]])
+  )
 }
 
 `%||%` <- function(x, y) {

@@ -180,19 +180,123 @@ test_that("grouped and removed action rows have expected export columns", {
     detection_id = c(1, 2),
     mic_id = c("NCNX06a", "NCNX06b"),
     toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
-    Duration = c(4, 5)
+    Duration = c(4, 5),
+    suspect_bearing = c(FALSE, TRUE)
   )
 
   grouped <- format_detection_action_rows(rows, notes = "same call", group_id = 1)
   removed <- format_detection_action_rows(rows[1, , drop = FALSE], notes = "noise")
 
-  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes"))
-  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes"))
+  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
   expect_equal(grouped$group_ID, c(1L, 1L))
   expect_equal(grouped$detection_ID, c("1", "2"))
   expect_equal(grouped$recorder_ID, c("NCNX06a", "NCNX06b"))
   expect_equal(grouped$detection_end_time, rows$toa + rows$Duration)
+  expect_equal(grouped$suspect_bearing, c(FALSE, TRUE))
   expect_equal(removed$Notes, "noise")
+})
+
+test_that("group membership exports keep the requested group data frame shape", {
+  rows <- data.frame(
+    rec_id = c("NCNX06a_1", "NCNX06b_2"),
+    detection_id = c(1, 2),
+    mic_id = c("NCNX06a", "NCNX06b"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
+    Duration = c(4, 5),
+    suspect_bearing = c(FALSE, TRUE)
+  )
+  membership <- format_group_membership_rows(rows, notes = "same call", group_id = 3)
+
+  grouped <- export_grouped_detections(membership, rows)
+
+  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_equal(grouped$group_ID, c(3L, 3L))
+  expect_equal(grouped$Notes, c("same call", "same call"))
+  expect_equal(grouped$suspect_bearing, c(FALSE, TRUE))
+})
+
+test_that("removed membership exports keep the requested removed data frame shape", {
+  rows <- data.frame(
+    rec_id = c("NCNX06a_1", "NCNX06b_2"),
+    detection_id = c(1, 2),
+    mic_id = c("NCNX06a", "NCNX06b"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
+    Duration = c(4, 5),
+    suspect_bearing = c(FALSE, TRUE)
+  )
+  membership <- format_removed_membership_rows(rows[2, , drop = FALSE], notes = "noise")
+
+  removed <- export_removed_detections(membership, rows)
+
+  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_equal(removed$detection_ID, "2")
+  expect_equal(removed$Notes, "noise")
+  expect_true(removed$suspect_bearing[[1]])
+})
+
+test_that("suspect bearing state toggles and applies by detection id", {
+  state <- empty_suspect_bearing_state()
+
+  state <- toggle_suspect_bearing_state(state, "a")
+  expect_true(suspect_bearing_for_rec_ids("a", state))
+  state <- toggle_suspect_bearing_state(state, "a")
+  expect_false(suspect_bearing_for_rec_ids("a", state))
+  expect_equal(suspect_bearing_for_rec_ids(c("a", "b"), state, default = c(TRUE, FALSE)), c(FALSE, FALSE))
+})
+
+test_that("bearing arrows are prepared from selected detections and recorder coordinates", {
+  rows <- data.frame(
+    rec_id = c("a1", "b1"),
+    mic_id = c("NCNX06a", "NCNX06b"),
+    bearing = c(90, 180),
+    stringsAsFactors = FALSE
+  )
+  mic_data <- data.frame(
+    mic_id = c("NCNX06a", "NCNX06b"),
+    lat = c(18.1, 18.2),
+    lng = c(104.5, 104.6),
+    stringsAsFactors = FALSE
+  )
+  state <- data.frame(rec_id = "b1", suspect_bearing = TRUE, stringsAsFactors = FALSE)
+
+  arrows <- prepare_bearing_arrows(rows, mic_data, state, distance_m = 500)
+
+  expect_equal(arrows$rec_id, c("a1", "b1"))
+  expect_equal(arrows$color, c("red", "grey"))
+  expect_true(all(is.finite(arrows$arrow_lat)))
+  expect_true(all(is.finite(arrows$arrow_lng)))
+})
+
+test_that("point status distinguishes active, grouped, and removed detections", {
+  grouped <- data.frame(group_ID = c(1L, 1L), rec_id = c("a", "b"), Notes = "", stringsAsFactors = FALSE)
+  removed <- data.frame(rec_id = "b", Notes = "", stringsAsFactors = FALSE)
+
+  expect_equal(
+    detection_point_status(c("a", "b", "c"), grouped, removed),
+    c("grouped", "removed", "active")
+  )
+})
+
+test_that("selected group ids are returned in numeric order", {
+  grouped <- data.frame(group_ID = c(3L, 1L, 3L), rec_id = c("a", "b", "c"), Notes = "", stringsAsFactors = FALSE)
+
+  expect_equal(selected_group_ids(c("c", "b"), grouped), c(1L, 3L))
+})
+
+test_that("group review range pads and clips to session bounds", {
+  session_row <- data.frame(
+    real_start = as.POSIXct("2026-01-01 22:00:00", tz = "UTC"),
+    real_stop = as.POSIXct("2026-01-02 00:00:00", tz = "UTC")
+  )
+  rows <- data.frame(
+    toa = as.POSIXct(c("2026-01-01 22:00:05", "2026-01-01 22:00:10"), tz = "UTC")
+  )
+
+  range <- group_review_range(rows, session_row)
+
+  expect_equal(range[[1]], session_row$real_start[[1]])
+  expect_equal(range[[2]], as.POSIXct("2026-01-01 22:00:22.5", tz = "UTC"))
 })
 
 test_that("click selection toggles detection ids", {
