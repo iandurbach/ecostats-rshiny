@@ -113,9 +113,9 @@ ui <- fluidPage(
       white-space: nowrap;
     }
     .app-grid {
+      --left-pane-width: 54%;
       display: grid;
-      grid-template-columns: minmax(640px, 54%) minmax(520px, 46%);
-      gap: 14px;
+      grid-template-columns: minmax(520px, var(--left-pane-width)) 8px minmax(420px, 1fr);
       height: calc(100vh - 56px);
       min-height: 0;
     }
@@ -125,15 +125,38 @@ ui <- fluidPage(
       overflow: hidden;
     }
     .left-workspace {
+      --top-pane-height: 48%;
       display: grid;
-      grid-template-rows: 272px auto 1fr;
+      grid-template-rows: minmax(250px, var(--top-pane-height)) 8px minmax(220px, 1fr);
+      min-width: 0;
+      min-height: 0;
+    }
+    .timeline-actions-pane {
+      display: grid;
+      grid-template-rows: minmax(0, 1fr) auto;
       gap: 8px;
+      min-height: 0;
+      overflow: hidden;
     }
     .timeline-wrap,
     .actions-wrap,
     .map-wrap,
     .spectro-pane {
       min-width: 0;
+    }
+    .timeline-wrap,
+    .map-wrap {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .timeline-wrap .shiny-plot-output,
+    .timeline-wrap .plotly,
+    .timeline-wrap .html-widget,
+    .timeline-wrap .html-widget-output,
+    .map-wrap .leaflet,
+    .map-wrap .shiny-bound-output {
+      height: 100% !important;
+      width: 100% !important;
     }
     .actions-wrap {
       display: grid;
@@ -161,6 +184,23 @@ ui <- fluidPage(
     }
     .map-wrap .leaflet {
       height: 100% !important;
+    }
+    .splitter {
+      background: #e6e6e6;
+      border-radius: 4px;
+      transition: background 120ms ease;
+    }
+    .splitter:hover,
+    .splitter.dragging {
+      background: #b8b8b8;
+    }
+    .vertical-splitter {
+      cursor: col-resize;
+      margin: 0 3px;
+    }
+    .horizontal-splitter {
+      cursor: row-resize;
+      margin: 3px 0;
     }
     .spectro-pane {
       border-left: 1px solid #ddd;
@@ -205,45 +245,137 @@ ui <- fluidPage(
         Shiny.setInputValue('spectro_zoom_reset', Math.random(), {priority: 'event'});
       }
     });
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    function notifyPaneResize() {
+      window.dispatchEvent(new Event('resize'));
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+      var grid = document.querySelector('.app-grid');
+      var leftPane = document.querySelector('.left-workspace');
+      var vertical = document.querySelector('.vertical-splitter');
+      var horizontal = document.querySelector('.horizontal-splitter');
+      if (!grid || !leftPane || !vertical || !horizontal) return;
+
+      var storedLeft = localStorage.getItem('detectionTimeline.leftPaneWidth');
+      var storedTop = localStorage.getItem('detectionTimeline.topPaneHeight');
+      if (storedLeft) grid.style.setProperty('--left-pane-width', storedLeft);
+      if (storedTop) leftPane.style.setProperty('--top-pane-height', storedTop);
+      setTimeout(notifyPaneResize, 250);
+      setTimeout(notifyPaneResize, 1000);
+
+      vertical.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        vertical.classList.add('dragging');
+        vertical.setPointerCapture(e.pointerId);
+
+        function move(ev) {
+          var rect = grid.getBoundingClientRect();
+          var width = clamp(ev.clientX - rect.left, 520, rect.width - 420);
+          grid.style.setProperty('--left-pane-width', width + 'px');
+          localStorage.setItem('detectionTimeline.leftPaneWidth', width + 'px');
+          notifyPaneResize();
+        }
+
+        function up(ev) {
+          vertical.classList.remove('dragging');
+          vertical.releasePointerCapture(ev.pointerId);
+          vertical.removeEventListener('pointermove', move);
+          vertical.removeEventListener('pointerup', up);
+          notifyPaneResize();
+        }
+
+        vertical.addEventListener('pointermove', move);
+        vertical.addEventListener('pointerup', up);
+      });
+
+      horizontal.addEventListener('pointerdown', function(e) {
+        e.preventDefault();
+        horizontal.classList.add('dragging');
+        horizontal.setPointerCapture(e.pointerId);
+
+        function move(ev) {
+          var rect = leftPane.getBoundingClientRect();
+          var height = clamp(ev.clientY - rect.top, 250, rect.height - 220);
+          leftPane.style.setProperty('--top-pane-height', height + 'px');
+          localStorage.setItem('detectionTimeline.topPaneHeight', height + 'px');
+          notifyPaneResize();
+        }
+
+        function up(ev) {
+          horizontal.classList.remove('dragging');
+          horizontal.releasePointerCapture(ev.pointerId);
+          horizontal.removeEventListener('pointermove', move);
+          horizontal.removeEventListener('pointerup', up);
+          notifyPaneResize();
+        }
+
+        horizontal.addEventListener('pointermove', move);
+        horizontal.addEventListener('pointerup', up);
+      });
+
+      vertical.addEventListener('dblclick', function() {
+        localStorage.removeItem('detectionTimeline.leftPaneWidth');
+        grid.style.removeProperty('--left-pane-width');
+        notifyPaneResize();
+      });
+
+      horizontal.addEventListener('dblclick', function() {
+        localStorage.removeItem('detectionTimeline.topPaneHeight');
+        leftPane.style.removeProperty('--top-pane-height');
+        notifyPaneResize();
+      });
+    });
   ")),
   div(
     class = "app-grid",
     div(
       class = "left-workspace",
       div(
-        class = "timeline-wrap",
-        plotly::plotlyOutput("timeline_plot", height = "272px")
-      ),
-      div(
-        class = "actions-wrap",
+        class = "timeline-actions-pane",
         div(
-          class = "notes-compact",
-          textAreaInput("action_notes", "Notes", value = "", rows = 1)
+          class = "timeline-wrap",
+          plotly::plotlyOutput("timeline_plot", height = "100%")
         ),
         div(
           div(
-            class = "button-row",
-            actionButton("group_selected", "Group"),
-            actionButton("remove_selected", "Remove"),
-            actionButton("ungroup_selected", "Ungroup"),
-            actionButton("clear_selection", "Clear selection"),
-            downloadButton("export_groups", "Export RData"),
-            actionButton("prev_group", "Previous group"),
-            actionButton("next_group", "Next group")
-          ),
-          div(
-            class = "status-row",
-            tags$span(textOutput("action_summary", inline = TRUE)),
-            tags$span(" | "),
-            tags$span(textOutput("group_review_summary", inline = TRUE))
+            class = "actions-wrap",
+            div(
+              class = "notes-compact",
+              textAreaInput("action_notes", "Notes", value = "", rows = 1)
+            ),
+            div(
+              div(
+                class = "button-row",
+                actionButton("group_selected", "Group"),
+                actionButton("remove_selected", "Remove"),
+                actionButton("ungroup_selected", "Ungroup"),
+                actionButton("clear_selection", "Clear selection"),
+                downloadButton("export_groups", "Export RData"),
+                actionButton("prev_group", "Previous group"),
+                actionButton("next_group", "Next group")
+              ),
+              div(
+                class = "status-row",
+                tags$span(textOutput("action_summary", inline = TRUE)),
+                tags$span(" | "),
+                tags$span(textOutput("group_review_summary", inline = TRUE))
+              )
+            )
           )
         )
       ),
+      div(class = "splitter horizontal-splitter", title = "Drag to resize timeline/map panes. Double-click to reset."),
       div(
         class = "map-wrap",
         leaflet::leafletOutput("selection_map", width = "100%", height = "100%")
       )
     ),
+    div(class = "splitter vertical-splitter", title = "Drag to resize left/right panes. Double-click to reset."),
     div(
       class = "spectro-pane",
       div(
