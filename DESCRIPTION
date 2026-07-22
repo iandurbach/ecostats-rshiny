@@ -23,6 +23,7 @@ Imports:
     magrittr (>= 2.0.3),
     purrr (>= 1.0.4),
     png,
+    plotly,
     RSQLite,
     shiny (>= 1.8.1.1),
     shinyFiles (>= 0.9.3),
@@ -30,7 +31,6 @@ Imports:
     tools
 Suggests: 
     knitr,
-    plotly,
     rmarkdown,
     testthat (>= 3.0.0)
 VignetteBuilder: 
