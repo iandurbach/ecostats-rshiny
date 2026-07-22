@@ -87,7 +87,110 @@ session_title <- function(session_row) {
 }
 
 ui <- fluidPage(
-  titlePanel("Detection Timeline Prototype"),
+  tags$head(tags$style(HTML("
+    html, body, .container-fluid {
+      height: 100%;
+      overflow: hidden;
+    }
+    body {
+      padding: 10px 14px;
+    }
+    .container-fluid {
+      padding-left: 0;
+      padding-right: 0;
+    }
+    .app-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 40px;
+      margin-bottom: 6px;
+    }
+    .app-title {
+      font-size: 22px;
+      font-weight: 700;
+      margin-right: 8px;
+      white-space: nowrap;
+    }
+    .app-grid {
+      display: grid;
+      grid-template-columns: minmax(640px, 54%) minmax(520px, 46%);
+      gap: 14px;
+      height: calc(100vh - 56px);
+      min-height: 0;
+    }
+    .left-workspace,
+    .spectro-pane {
+      min-height: 0;
+      overflow: hidden;
+    }
+    .left-workspace {
+      display: grid;
+      grid-template-rows: 272px auto 1fr;
+      gap: 8px;
+    }
+    .timeline-wrap,
+    .actions-wrap,
+    .map-wrap,
+    .spectro-pane {
+      min-width: 0;
+    }
+    .actions-wrap {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      gap: 8px 10px;
+      align-items: end;
+    }
+    .notes-compact .form-group {
+      margin-bottom: 0;
+    }
+    .notes-compact textarea {
+      height: 44px;
+      resize: none;
+    }
+    .button-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .status-row {
+      font-size: 13px;
+      line-height: 1.2;
+      margin-top: 4px;
+    }
+    .map-wrap .leaflet {
+      height: 100% !important;
+    }
+    .spectro-pane {
+      border-left: 1px solid #ddd;
+      padding-left: 12px;
+      display: flex;
+      flex-direction: column;
+    }
+    .spectro-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+      flex: 0 0 auto;
+    }
+    .spectro-output {
+      flex: 1 1 auto;
+      overflow: auto;
+      min-height: 0;
+    }
+    .spectro-output img {
+      display: block;
+    }
+  "))),
+  div(
+    class = "app-header",
+    div(class = "app-title", "Detection Timeline Prototype"),
+    actionButton("prev_session", "Previous session"),
+    actionButton("next_session", "Next session"),
+    tags$span(textOutput("session_summary", inline = TRUE))
+  ),
   tags$script(HTML("
     document.addEventListener('keydown', function(e) {
       if (!(e.ctrlKey || e.metaKey)) return;
@@ -103,56 +206,55 @@ ui <- fluidPage(
       }
     });
   ")),
-  fluidRow(
-    column(
-      12,
+  div(
+    class = "app-grid",
+    div(
+      class = "left-workspace",
       div(
-        style = "display: flex; align-items: center; gap: 8px; margin-bottom: 10px;",
-        actionButton("prev_session", "Previous session"),
-        actionButton("next_session", "Next session"),
-        tags$span(textOutput("session_summary", inline = TRUE))
-      )
-    )
-  ),
-  fluidRow(
-    column(
-      8,
-      plotly::plotlyOutput("timeline_plot", height = "420px"),
+        class = "timeline-wrap",
+        plotly::plotlyOutput("timeline_plot", height = "272px")
+      ),
       div(
-        style = "margin-top: 10px;",
-        textAreaInput("action_notes", "Notes", value = "", rows = 2),
+        class = "actions-wrap",
         div(
-          style = "display: flex; align-items: center; gap: 8px;",
-          actionButton("group_selected", "Group"),
-          actionButton("remove_selected", "Remove"),
-          actionButton("ungroup_selected", "Ungroup"),
-          actionButton("clear_selection", "Clear selection"),
-          downloadButton("export_groups", "Export RData"),
-          tags$span(textOutput("action_summary", inline = TRUE))
+          class = "notes-compact",
+          textAreaInput("action_notes", "Notes", value = "", rows = 1)
         ),
         div(
-          style = "display: flex; align-items: center; gap: 8px; margin-top: 8px;",
-          actionButton("prev_group", "Previous group"),
-          actionButton("next_group", "Next group"),
-          tags$span(textOutput("group_review_summary", inline = TRUE))
+          div(
+            class = "button-row",
+            actionButton("group_selected", "Group"),
+            actionButton("remove_selected", "Remove"),
+            actionButton("ungroup_selected", "Ungroup"),
+            actionButton("clear_selection", "Clear selection"),
+            downloadButton("export_groups", "Export RData"),
+            actionButton("prev_group", "Previous group"),
+            actionButton("next_group", "Next group")
+          ),
+          div(
+            class = "status-row",
+            tags$span(textOutput("action_summary", inline = TRUE)),
+            tags$span(" | "),
+            tags$span(textOutput("group_review_summary", inline = TRUE))
+          )
         )
       ),
       div(
-        style = "margin-top: 14px;",
-        leaflet::leafletOutput("selection_map", width = "100%", height = 360)
+        class = "map-wrap",
+        leaflet::leafletOutput("selection_map", width = "100%", height = "100%")
       )
     ),
-    column(
-      4,
+    div(
+      class = "spectro-pane",
       div(
-        style = "height: 800px; overflow: auto; border-left: 1px solid #ddd; padding-left: 12px;",
-        div(
-          style = "display: flex; align-items: center; gap: 6px; margin-bottom: 8px;",
-          actionButton("spectro_zoom_out", "Zoom out"),
-          actionButton("spectro_zoom_in", "Zoom in"),
-          actionButton("spectro_zoom_reset_button", "Reset"),
-          tags$span(textOutput("spectro_zoom_label", inline = TRUE))
-        ),
+        class = "spectro-controls",
+        actionButton("spectro_zoom_out", "Zoom out"),
+        actionButton("spectro_zoom_in", "Zoom in"),
+        actionButton("spectro_zoom_reset_button", "Reset"),
+        tags$span(textOutput("spectro_zoom_label", inline = TRUE))
+      ),
+      div(
+        class = "spectro-output",
         uiOutput("selected_spectrograms")
       )
     )
@@ -638,7 +740,13 @@ server <- function(input, output, session) {
     }
 
     img_path <- tryCatch(
-      write_current_comparison_spectrogram_png(rows, wav_root, spectro_cache_dir),
+      write_current_comparison_spectrogram_png(
+        rows,
+        wav_root,
+        spectro_cache_dir,
+        width = 900,
+        row_height = 230
+      ),
       error = function(e) e
     )
     if (inherits(img_path, "error")) {
@@ -650,7 +758,6 @@ server <- function(input, output, session) {
     }
 
     tags$div(
-      tags$strong(paste(nrow(rows), "selected detection(s)")),
       tags$img(
         src = paste0(encode_image(img_path), "#v=", as.numeric(Sys.time())),
         style = paste0(

@@ -278,10 +278,10 @@ ensure_comparison_spectrogram_png <- function(rows, wav_root, cache_dir) {
   out_path
 }
 
-write_current_comparison_spectrogram_png <- function(rows, wav_root, cache_dir, filename = "current_comparison.png") {
+write_current_comparison_spectrogram_png <- function(rows, wav_root, cache_dir, filename = "current_comparison.png", width = 900, row_height = 150) {
   out_path <- file.path(cache_dir, filename)
   comparison <- prepare_comparison_spectrograms(rows, wav_root)
-  write_comparison_spectrogram_png(comparison, out_path)
+  write_comparison_spectrogram_png(comparison, out_path, width = width, row_height = row_height)
   out_path
 }
 
