@@ -63,8 +63,9 @@ test_that("set packing assigns each selected detection at most once", {
   expect_equal(anyDuplicated(result$group_membership$rec_id), 0L)
   expect_named(
     result$grouped_detections,
-    c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
+    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
   )
+  expect_true(all(result$grouped_detections$grouping_method == "automated"))
 })
 
 test_that("saved clusterer output matches app grouping RData format", {
@@ -82,7 +83,7 @@ test_that("saved clusterer output matches app grouping RData format", {
   expect_false(exists("result", envir = env, inherits = FALSE))
   expect_named(
     env$groups,
-    c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
+    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
   )
   expect_named(
     env$removed_points,
@@ -92,6 +93,55 @@ test_that("saved clusterer output matches app grouping RData format", {
   timeline <- prepare_grouping_inputs(recordings)$detections
   imported <- import_group_membership(env$groups, timeline)
   expect_equal(imported$rec_id, result$group_membership$rec_id)
+  expect_true(all(imported$grouping_method == "automated"))
+})
+
+test_that("session proposals preserve existing groups and removed detections", {
+  skip_if_no_clusterer_script()
+  prepared <- prepare_grouping_inputs(make_clusterer_recordings())
+  existing <- format_group_membership_rows(
+    prepared$detections[1, , drop = FALSE],
+    group_id = 20,
+    grouping_method = "manual"
+  )
+  removed <- format_removed_membership_rows(prepared$detections[2, , drop = FALSE])
+
+  proposals <- propose_session_groups(
+    prepared$detections,
+    prepared$mics,
+    existing,
+    removed,
+    start_time = as.POSIXct("2026-01-01 00:00:10", tz = "UTC"),
+    solver = "lpsolve",
+    max_group_span_seconds = 4
+  )
+
+  expect_false(any(proposals$rec_id %in% c(existing$rec_id, removed$rec_id)))
+  expect_true(all(proposals$grouping_method == "automated"))
+  expect_true(all(prepared$detections$toa[match(proposals$rec_id, prepared$detections$rec_id)] >=
+    as.POSIXct("2026-01-01 00:00:10", tz = "UTC")))
+})
+
+test_that("session proposals are chronological and can be remapped to app ids", {
+  skip_if_no_clusterer_script()
+  prepared <- prepare_grouping_inputs(make_clusterer_recordings())
+  proposals <- propose_session_groups(
+    prepared$detections,
+    prepared$mics,
+    empty_group_membership(),
+    empty_removed_membership(),
+    solver = "lpsolve",
+    max_group_span_seconds = 4
+  )
+
+  starts <- vapply(sort(unique(proposals$group_ID)), function(group_id) {
+    min(as.numeric(prepared$detections$toa[prepared$detections$rec_id %in%
+      proposals$rec_id[proposals$group_ID == group_id]]))
+  }, numeric(1))
+  remapped <- remap_proposed_group_ids(proposals, 100L)
+
+  expect_equal(starts, sort(starts))
+  expect_equal(sort(unique(remapped$group_ID)), seq.int(100L, length(unique(proposals$group_ID)) + 99L))
 })
 
 test_that("ungrouped detections remain available", {

@@ -28,7 +28,19 @@ test_that("detection timeline module UI exposes the new workflow controls", {
   expect_match(html, "timeline_plot")
   expect_match(html, "selection_map")
   expect_match(html, "selected_spectrograms")
+  expect_match(html, "Auto group")
+  expect_match(html, "Auto group all")
+  expect_match(html, "Clear all groups")
+  expect_lt(regexpr("action_notes", html)[[1]], regexpr("group_selected", html)[[1]])
+  expect_lt(regexpr("next_group", html)[[1]], regexpr("auto_group", html)[[1]])
 
   fmls <- formals(mod_detection_timeline_ui)
   expect_true("id" %in% names(fmls))
+})
+
+test_that("server-created confirmation controls use the module session namespace", {
+  server_code <- paste(deparse(body(mod_detection_timeline_server)), collapse = "\n")
+
+  expect_match(server_code, 'session\\$ns\\("confirm_clear_session_groups"\\)')
+  expect_false(grepl('actionButton\\(ns\\("confirm_clear_session_groups"', server_code))
 })

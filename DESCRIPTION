@@ -14,12 +14,14 @@ Imports:
     config (>= 0.3.2),
     DBI,
     DT (>= 0.33),
+    dplyr,
     geosphere (>= 1.5.20),
     golem (>= 0.4.1),
     leaflet (>= 2.2.2),
     leaflet.extras (>= 2.0.1),
     leaflet.extras2 (>= 1.3.2),
     lubridate (>= 1.9.4),
+    lpSolve,
     magrittr (>= 2.0.3),
     purrr (>= 1.0.4),
     png,
@@ -31,6 +33,10 @@ Imports:
     tools
 Suggests: 
     knitr,
+    ompr,
+    ompr.roi,
+    ROI,
+    ROI.plugin.glpk,
     rmarkdown,
     testthat (>= 3.0.0)
 VignetteBuilder: 

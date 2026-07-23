@@ -187,9 +187,10 @@ test_that("grouped and removed action rows have expected export columns", {
   grouped <- format_detection_action_rows(rows, notes = "same call", group_id = 1)
   removed <- format_detection_action_rows(rows[1, , drop = FALSE], notes = "noise")
 
-  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
   expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
   expect_equal(grouped$group_ID, c(1L, 1L))
+  expect_equal(grouped$grouping_method, c("manual", "manual"))
   expect_equal(grouped$detection_ID, c("1", "2"))
   expect_equal(grouped$recorder_ID, c("NCNX06a", "NCNX06b"))
   expect_equal(grouped$detection_end_time, rows$toa + rows$Duration)
@@ -210,8 +211,9 @@ test_that("group membership exports keep the requested group data frame shape", 
 
   grouped <- export_grouped_detections(membership, rows)
 
-  expect_named(grouped, c("group_ID", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
   expect_equal(grouped$group_ID, c(3L, 3L))
+  expect_equal(grouped$grouping_method, c("manual", "manual"))
   expect_equal(grouped$Notes, c("same call", "same call"))
   expect_equal(grouped$suspect_bearing, c(FALSE, TRUE))
 })
@@ -232,6 +234,7 @@ test_that("exported grouped rows import back to group membership", {
 
   expect_equal(imported$group_ID, c(3L, 3L))
   expect_equal(imported$rec_id, c("NCNX06a_1", "NCNX06b_2"))
+  expect_equal(imported$grouping_method, c("manual", "manual"))
   expect_equal(imported$Notes, c("same call", "same call"))
   expect_equal(imported$suspect_bearing, c(FALSE, TRUE))
 })
@@ -498,6 +501,78 @@ test_that("group review range pads and clips to session bounds", {
 
   expect_equal(range[[1]], session_row$real_start[[1]])
   expect_equal(range[[2]], as.POSIXct("2026-01-01 22:00:22.5", tz = "UTC"))
+})
+
+test_that("automatic group review keeps a two-minute window within session bounds", {
+  session_row <- data.frame(
+    real_start = as.POSIXct("2026-01-01 22:00:00", tz = "UTC"),
+    real_stop = as.POSIXct("2026-01-02 00:00:00", tz = "UTC")
+  )
+  early_rows <- data.frame(
+    toa = as.POSIXct(c("2026-01-01 22:00:05", "2026-01-01 22:00:10"), tz = "UTC")
+  )
+  late_rows <- data.frame(
+    toa = as.POSIXct(c("2026-01-01 23:59:50", "2026-01-01 23:59:55"), tz = "UTC")
+  )
+
+  early_range <- automatic_group_review_range(early_rows, session_row)
+  late_range <- automatic_group_review_range(late_rows, session_row)
+
+  expect_equal(as.numeric(difftime(early_range[[2]], early_range[[1]], units = "secs")), 120)
+  expect_equal(early_range[[1]], session_row$real_start[[1]])
+  expect_equal(as.numeric(difftime(late_range[[2]], late_range[[1]], units = "secs")), 120)
+  expect_equal(late_range[[2]], session_row$real_stop[[1]])
+})
+
+test_that("clearing session groups preserves groups from other sessions", {
+  grouped <- data.frame(
+    group_ID = c(1L, 1L, 2L, 3L),
+    rec_id = c("session_a", "session_b", "other_a", "other_b"),
+    grouping_method = c("manual", "manual", "automated", "manual"),
+    Notes = "",
+    suspect_bearing = FALSE
+  )
+  session_rows <- data.frame(rec_id = c("session_a", "session_b"))
+
+  cleared <- clear_session_group_membership(grouped, session_rows)
+
+  expect_equal(cleared$rec_id, c("other_a", "other_b"))
+  expect_equal(cleared$group_ID, c(2L, 3L))
+  expect_named(cleared, names(grouped))
+})
+
+test_that("legacy groups import as manual and automated provenance round trips", {
+  rows <- data.frame(
+    rec_id = c("a", "b"),
+    detection_id = c("1", "2"),
+    mic_id = c("A", "B"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
+    Duration = c(1, 1),
+    suspect_bearing = FALSE
+  )
+  legacy <- format_detection_action_rows(rows[1, , drop = FALSE], group_id = 1)
+  legacy$grouping_method <- NULL
+  automated <- format_detection_action_rows(
+    rows[2, , drop = FALSE],
+    group_id = 2,
+    grouping_method = "automated"
+  )
+
+  expect_equal(import_group_membership(legacy, rows)$grouping_method, "manual")
+  expect_equal(import_group_membership(automated, rows)$grouping_method, "automated")
+})
+
+test_that("timeline range start handles visible ranges and session fallback", {
+  session_row <- data.frame(
+    real_start = as.POSIXct("2026-01-01 22:00:00", tz = "UTC"),
+    real_stop = as.POSIXct("2026-01-02 00:00:00", tz = "UTC")
+  )
+
+  expect_equal(timeline_range_start(NULL, session_row), session_row$real_start[[1]])
+  expect_equal(
+    timeline_range_start(list("2026-01-01 22:15:00", "2026-01-01 22:30:00"), session_row),
+    as.POSIXct("2026-01-01 22:15:00", tz = "UTC")
+  )
 })
 
 test_that("click selection toggles detection ids", {

@@ -134,11 +134,14 @@ mod_detection_timeline_ui <- function(id) {
         flex-wrap: wrap;
         min-height: 0;
       }
+      .notes-compact,
       .notes-compact .form-group {
+        width: 90px;
+        flex: 0 0 90px;
         margin-bottom: 0;
       }
       .notes-compact textarea {
-        width: 180px;
+        width: 100%;
         height: 30px;
         min-height: 30px;
         padding: 3px 7px;
@@ -365,14 +368,6 @@ mod_detection_timeline_ui <- function(id) {
                     class = "actions-wrap",
                     div(
                       class = "button-row",
-                      actionButton(ns("group_selected"), "Group", class = "btn-sm"),
-                      actionButton(ns("ungroup_selected"), "Ungroup", class = "btn-sm"),
-                      actionButton(ns("remove_selected"), "Remove", class = "btn-sm"),
-                      actionButton(ns("clear_selection"), "Clear selection", class = "btn-sm"),
-                      div(class = "actions-spacer"),
-                      actionButton(ns("prev_group"), "Previous group", class = "btn-sm"),
-                      actionButton(ns("next_group"), "Next group", class = "btn-sm"),
-                      div(class = "actions-spacer"),
                       div(
                         class = "notes-compact",
                         textAreaInput(
@@ -382,7 +377,19 @@ mod_detection_timeline_ui <- function(id) {
                           rows = 1,
                           placeholder = "Notes"
                         )
-                      )
+                      ),
+                      actionButton(ns("group_selected"), "Group", class = "btn-sm"),
+                      actionButton(ns("ungroup_selected"), "Ungroup", class = "btn-sm"),
+                      actionButton(ns("remove_selected"), "Remove", class = "btn-sm"),
+                      actionButton(ns("clear_selection"), "Clear selection", class = "btn-sm"),
+                      div(class = "actions-spacer"),
+                      actionButton(ns("prev_group"), "Previous group", class = "btn-sm"),
+                      actionButton(ns("next_group"), "Next group", class = "btn-sm"),
+                      div(class = "actions-spacer"),
+                      actionButton(ns("auto_group"), "Auto group", class = "btn-sm"),
+                      actionButton(ns("auto_group_all"), "Auto group all", class = "btn-sm"),
+                      div(class = "actions-spacer"),
+                      actionButton(ns("clear_session_groups"), "Clear all groups", class = "btn-sm")
                     ),
                     div(
                       class = "status-row",
@@ -443,6 +450,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     current_review_group_id <- reactiveVal(NULL)
     action_selected_rec_ids <- reactiveVal(character(0))
     current_x_range <- reactiveVal(NULL)
+    auto_group_cursor <- reactiveVal(NULL)
     selection_revision <- reactiveVal(0L)
     spectro_cache_dir <- reactiveVal(file.path(tempdir(), paste0("detection_timeline_spectros_", session$token)))
 
@@ -513,6 +521,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
+      auto_group_cursor(NULL)
       selection_revision(selection_revision() + 1L)
       showNotification(
         paste(
@@ -534,6 +543,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
+      auto_group_cursor(NULL)
       selection_revision(selection_revision() + 1L)
       spectro_zoom(1)
     }
@@ -625,6 +635,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
+      auto_group_cursor(NULL)
     })
 
     observeEvent(input$next_session, {
@@ -634,6 +645,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
+      auto_group_cursor(NULL)
     })
 
     update_spectro_zoom <- function(delta) {
@@ -658,9 +670,14 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       relayout <- timeline_event_data("plotly_relayout")
       if (is.null(relayout)) return()
       if (!is.null(relayout[["xaxis.range[0]"]]) && !is.null(relayout[["xaxis.range[1]"]])) {
-        current_x_range(list(relayout[["xaxis.range[0]"]], relayout[["xaxis.range[1]"]]))
+        new_range <- list(relayout[["xaxis.range[0]"]], relayout[["xaxis.range[1]"]])
+        current_x_range(new_range)
+        if (!is.null(sessions_data())) {
+          auto_group_cursor(timeline_range_start(new_range, current_session()))
+        }
       } else if (isTRUE(relayout[["xaxis.autorange"]])) {
         current_x_range(NULL)
+        auto_group_cursor(NULL)
       }
     }, ignoreNULL = TRUE)
 
@@ -965,11 +982,17 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       group_id <- if (length(existing_groups) == 1) existing_groups[[1]] else next_group_id()
       gm <- group_membership()
       rm <- removed_membership()
+      grouping_method <- if (length(existing_groups) == 1) {
+        unique(gm$grouping_method[gm$group_ID == group_id])[[1]]
+      } else {
+        "manual"
+      }
       ids_to_add <- setdiff(rows$rec_id, gm$rec_id[gm$group_ID == group_id])
       new_rows <- format_group_membership_rows(
         rows[rows$rec_id %in% ids_to_add, , drop = FALSE],
         notes = input$action_notes,
-        group_id = group_id
+        group_id = group_id,
+        grouping_method = grouping_method
       )
       group_membership(dplyr::bind_rows(gm, new_rows))
       removed_membership(rm[!rm$rec_id %in% rows$rec_id, , drop = FALSE])
@@ -1058,6 +1081,110 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
 
     observeEvent(input$next_group, {
       review_group(1L)
+    })
+
+    run_auto_group <- function(all_groups = FALSE) {
+      dat <- apply_suspect_bearing_state(session_data(), suspect_bearing_state())
+      start_time <- if (all_groups) {
+        NULL
+      } else {
+        auto_group_cursor() %||% timeline_range_start(current_x_range(), current_session())
+      }
+      proposals <- tryCatch(
+        propose_session_groups(
+          session_rows = dat,
+          mics = mic_data(),
+          group_membership = group_membership(),
+          removed_membership = removed_membership(),
+          start_time = start_time
+        ),
+        error = function(e) e
+      )
+      if (inherits(proposals, "error")) {
+        showNotification(
+          paste("Automatic grouping failed:", conditionMessage(proposals)),
+          type = "error",
+          duration = 10
+        )
+        return()
+      }
+      if (nrow(proposals) == 0) {
+        showNotification(
+          if (all_groups) {
+            "No eligible groups were found in the current session."
+          } else {
+            "No eligible group was found at or after the current timeline start."
+          },
+          type = "warning"
+        )
+        return()
+      }
+
+      if (!all_groups) {
+        proposals <- proposals[proposals$group_ID == min(proposals$group_ID), , drop = FALSE]
+      }
+      proposals <- remap_proposed_group_ids(proposals, next_group_id())
+      added_group_ids <- sort(unique(proposals$group_ID))
+      group_membership(dplyr::bind_rows(group_membership(), proposals))
+      next_group_id(max(added_group_ids) + 1L)
+      selection_revision(selection_revision() + 1L)
+
+      if (all_groups) {
+        showNotification(
+          paste("Created", length(added_group_ids), "automatic group(s) in the current session."),
+          type = "message"
+        )
+        return()
+      }
+
+      group_id <- added_group_ids[[1]]
+      rows <- dat[dat$rec_id %in% proposals$rec_id, , drop = FALSE]
+      rows <- rows[order(rows$toa, rows$mic_id), , drop = FALSE]
+      auto_group_cursor(min(rows$toa))
+      current_x_range(automatic_group_review_range(rows, current_session()))
+      action_selected_rec_ids(rows$rec_id)
+      current_review_group_id(group_id)
+      showNotification(paste("Created automatic group", group_id), type = "message")
+    }
+
+    observeEvent(input$auto_group, {
+      run_auto_group(FALSE)
+    })
+
+    observeEvent(input$auto_group_all, {
+      run_auto_group(TRUE)
+    })
+
+    observeEvent(input$clear_session_groups, {
+      group_ids <- session_group_ids(session_data(), group_membership())
+      if (length(group_ids) == 0) {
+        showNotification("There are no groups to clear in the current session.", type = "warning")
+        return()
+      }
+      showModal(modalDialog(
+        "This will clear all groups this session. Are you sure?",
+        title = "Clear all groups",
+        easyClose = FALSE,
+        footer = tagList(
+          modalButton("Cancel"),
+          actionButton(session$ns("confirm_clear_session_groups"), "Clear all groups", class = "btn-danger")
+        )
+      ))
+    })
+
+    observeEvent(input$confirm_clear_session_groups, {
+      dat <- session_data()
+      group_ids <- session_group_ids(dat, group_membership())
+      group_membership(clear_session_group_membership(group_membership(), dat))
+      current_review_group_id(NULL)
+      action_selected_rec_ids(character(0))
+      auto_group_cursor(NULL)
+      selection_revision(selection_revision() + 1L)
+      removeModal()
+      showNotification(
+        paste("Cleared", length(group_ids), "group(s) from the current session."),
+        type = "message"
+      )
     })
 
     observeEvent(input$clear_selection, {

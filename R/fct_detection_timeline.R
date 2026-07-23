@@ -288,6 +288,7 @@ write_current_comparison_spectrogram_png <- function(rows, wav_root, cache_dir, 
 empty_grouped_detections <- function() {
   data.frame(
     group_ID = integer(0),
+    grouping_method = character(0),
     detection_ID = character(0),
     recorder_ID = character(0),
     detection_start_time = as.POSIXct(character(0), tz = "UTC"),
@@ -314,6 +315,7 @@ empty_group_membership <- function() {
   data.frame(
     group_ID = integer(0),
     rec_id = character(0),
+    grouping_method = character(0),
     Notes = character(0),
     suspect_bearing = logical(0),
     stringsAsFactors = FALSE
@@ -329,7 +331,17 @@ empty_removed_membership <- function() {
   )
 }
 
-format_detection_action_rows <- function(rows, notes = "", group_id = NULL) {
+normalize_grouping_method <- function(x, n = length(x), default = "manual") {
+  if (is.null(x)) x <- rep(default, n)
+  x <- as.character(x)
+  x[is.na(x) | !nzchar(x)] <- default
+  if (length(x) != n || any(!x %in% c("manual", "automated"))) {
+    stop("grouping_method must contain only 'manual' or 'automated'.")
+  }
+  x
+}
+
+format_detection_action_rows <- function(rows, notes = "", group_id = NULL, grouping_method = "manual") {
   if (nrow(rows) == 0) {
     if (is.null(group_id)) return(empty_removed_detections())
     return(empty_grouped_detections())
@@ -351,16 +363,22 @@ format_detection_action_rows <- function(rows, notes = "", group_id = NULL) {
     stringsAsFactors = FALSE
   )
   if (!is.null(group_id)) {
-    out <- data.frame(group_ID = rep(as.integer(group_id), nrow(out)), out, stringsAsFactors = FALSE)
+    out <- data.frame(
+      group_ID = rep(as.integer(group_id), nrow(out)),
+      grouping_method = normalize_grouping_method(rep(grouping_method, nrow(out))),
+      out,
+      stringsAsFactors = FALSE
+    )
   }
   out
 }
 
-format_group_membership_rows <- function(rows, notes = "", group_id) {
+format_group_membership_rows <- function(rows, notes = "", group_id, grouping_method = "manual") {
   if (nrow(rows) == 0) return(empty_group_membership())
   data.frame(
     group_ID = rep(as.integer(group_id), nrow(rows)),
     rec_id = as.character(rows$rec_id),
+    grouping_method = normalize_grouping_method(rep(grouping_method, nrow(rows))),
     Notes = rep(as.character(notes %||% ""), nrow(rows)),
     suspect_bearing = if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else rep(FALSE, nrow(rows)),
     stringsAsFactors = FALSE
@@ -379,11 +397,20 @@ format_removed_membership_rows <- function(rows, notes = "") {
 
 export_grouped_detections <- function(group_membership, timeline_data) {
   if (nrow(group_membership) == 0) return(empty_grouped_detections())
+  group_membership$grouping_method <- normalize_grouping_method(
+    if ("grouping_method" %in% names(group_membership)) group_membership$grouping_method else NULL,
+    nrow(group_membership)
+  )
   pieces <- lapply(seq_len(nrow(group_membership)), function(i) {
     member <- group_membership[i, , drop = FALSE]
     rows <- timeline_data[timeline_data$rec_id %in% member$rec_id, , drop = FALSE]
     rows$suspect_bearing <- member$suspect_bearing
-    format_detection_action_rows(rows, notes = member$Notes, group_id = member$group_ID)
+    format_detection_action_rows(
+      rows,
+      notes = member$Notes,
+      group_id = member$group_ID,
+      grouping_method = member$grouping_method
+    )
   })
   dplyr::bind_rows(pieces)
 }
@@ -659,6 +686,10 @@ import_group_membership <- function(groups, timeline_data) {
   out <- data.frame(
     group_ID = as.integer(groups$group_ID),
     rec_id = as.character(timeline_data$rec_id[idx]),
+    grouping_method = normalize_grouping_method(
+      if ("grouping_method" %in% names(groups)) groups$grouping_method else NULL,
+      nrow(groups)
+    ),
     Notes = if ("Notes" %in% names(groups)) as.character(groups$Notes) else rep("", nrow(groups)),
     suspect_bearing = if ("suspect_bearing" %in% names(groups)) as.logical(groups$suspect_bearing) else rep(FALSE, nrow(groups)),
     stringsAsFactors = FALSE
@@ -914,6 +945,49 @@ group_review_range <- function(rows, session_row, min_window_seconds = 30, paddi
     max(start_time, session_row$real_start[[1]]),
     min(stop_time, session_row$real_stop[[1]])
   )
+}
+
+automatic_group_review_range <- function(rows, session_row, window_seconds = 120) {
+  session_start <- session_row$real_start[[1]]
+  session_stop <- session_row$real_stop[[1]]
+  if (nrow(rows) == 0) return(list(session_start, session_stop))
+
+  session_span <- as.numeric(difftime(session_stop, session_start, units = "secs"))
+  if (!is.finite(session_span) || session_span <= window_seconds) {
+    return(list(session_start, session_stop))
+  }
+
+  midpoint <- min(rows$toa, na.rm = TRUE) +
+    as.numeric(difftime(max(rows$toa, na.rm = TRUE), min(rows$toa, na.rm = TRUE), units = "secs")) / 2
+  start_time <- midpoint - window_seconds / 2
+  stop_time <- midpoint + window_seconds / 2
+  if (start_time < session_start) {
+    start_time <- session_start
+    stop_time <- session_start + window_seconds
+  } else if (stop_time > session_stop) {
+    stop_time <- session_stop
+    start_time <- session_stop - window_seconds
+  }
+  list(start_time, stop_time)
+}
+
+clear_session_group_membership <- function(group_membership, session_rows) {
+  if (nrow(group_membership) == 0 || nrow(session_rows) == 0) return(group_membership)
+  group_membership[!group_membership$rec_id %in% session_rows$rec_id, , drop = FALSE]
+}
+
+timeline_range_start <- function(x_range, session_row) {
+  fallback <- session_row$real_start[[1]]
+  if (is.null(x_range) || length(x_range) < 1 || is.null(x_range[[1]])) return(fallback)
+  value <- x_range[[1]]
+  parsed <- if (inherits(value, "POSIXct")) {
+    value
+  } else if (is.numeric(value)) {
+    as.POSIXct(value, origin = "1970-01-01", tz = "UTC")
+  } else {
+    as.POSIXct(as.character(value), tz = "UTC")
+  }
+  if (length(parsed) != 1 || is.na(parsed)) fallback else parsed
 }
 
 `%||%` <- function(x, y) {
