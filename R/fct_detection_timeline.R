@@ -97,6 +97,7 @@ read_recording_intervals_from_databases <- function(db_paths) {
     on.exit(DBI::dbDisconnect(conn), add = TRUE)
     intervals <- pair_sound_acquisition_intervals(DBI::dbReadTable(conn, "Sound_Acquisition"))
     intervals$mic_id <- parse_recorder_id_from_database_path(db_path)
+    intervals$cluster_id <- parse_cluster_id_from_mic_id(intervals$mic_id)
     intervals$database_path <- normalizePath(db_path, mustWork = FALSE)
     intervals
   })
@@ -105,6 +106,30 @@ read_recording_intervals_from_databases <- function(db_paths) {
 }
 
 build_recording_sessions <- function(intervals, gap_seconds = 30 * 60) {
+  if ("cluster_id" %in% names(intervals)) {
+    cluster_ids <- sort(unique(as.character(intervals$cluster_id[!is.na(intervals$cluster_id)])))
+    if (length(cluster_ids) == 0) {
+      stop("Recording intervals do not contain any valid cluster IDs.")
+    }
+    sessions <- lapply(cluster_ids, function(cluster_id) {
+      cluster_intervals <- intervals[as.character(intervals$cluster_id) == cluster_id, , drop = FALSE]
+      out <- merge_detection_sessions(
+        cluster_intervals,
+        gap_seconds = gap_seconds,
+        compressed_gap_seconds = 0
+      )
+      if (nrow(out) == 0) return(NULL)
+      out$cluster_id <- cluster_id
+      out$session_index <- seq_len(nrow(out))
+      out$session_id <- paste0("cluster_", cluster_id, "_session_", out$session_index)
+      out[, c(
+        "cluster_id", "session_index", "session_id", "real_start",
+        "real_stop", "duration_seconds"
+      ), drop = FALSE]
+    })
+    return(dplyr::bind_rows(sessions))
+  }
+
   sessions <- merge_detection_sessions(
     intervals,
     gap_seconds = gap_seconds,
@@ -122,15 +147,76 @@ assign_detections_to_sessions <- function(detections, sessions, time_col = "toa"
 
   out <- detections
   out$session_id <- NA_character_
+  cluster_aware <- "cluster_id" %in% names(sessions)
+  if (cluster_aware && !"cluster_id" %in% names(out)) {
+    stop("Cluster-aware sessions require detections$cluster_id.")
+  }
   for (i in seq_len(nrow(sessions))) {
     in_session <- out[[time_col]] >= sessions$real_start[[i]] & out[[time_col]] <= sessions$real_stop[[i]]
+    if (cluster_aware) {
+      in_session <- in_session &
+        as.character(out$cluster_id) == as.character(sessions$cluster_id[[i]])
+    }
     out$session_id[in_session] <- sessions$session_id[[i]]
   }
 
   recorder_levels <- sort(unique(as.character(out[[recorder_col]])))
-  out$recorder_lane <- match(as.character(out[[recorder_col]]), recorder_levels)
+  if (cluster_aware) {
+    out$recorder_lane <- NA_integer_
+    for (cluster_id in unique(as.character(out$cluster_id))) {
+      in_cluster <- !is.na(out$cluster_id) & as.character(out$cluster_id) == cluster_id
+      levels <- sort(unique(as.character(out[[recorder_col]][in_cluster])))
+      out$recorder_lane[in_cluster] <- match(as.character(out[[recorder_col]][in_cluster]), levels)
+    }
+  } else {
+    out$recorder_lane <- match(as.character(out[[recorder_col]]), recorder_levels)
+  }
   attr(out, "recorder_levels") <- recorder_levels
   out
+}
+
+cluster_display_label <- function(cluster_id) {
+  numeric_id <- suppressWarnings(as.integer(cluster_id))
+  suffix <- if (length(numeric_id) == 1 && !is.na(numeric_id)) {
+    sprintf("%02d", numeric_id)
+  } else {
+    as.character(cluster_id)
+  }
+  paste0("NCNX", suffix)
+}
+
+ordered_cluster_ids <- function(sessions) {
+  if (is.null(sessions) || nrow(sessions) == 0 || !"cluster_id" %in% names(sessions)) {
+    return(character(0))
+  }
+  ids <- unique(as.character(sessions$cluster_id))
+  numeric_ids <- suppressWarnings(as.integer(ids))
+  ids[order(is.na(numeric_ids), numeric_ids, ids)]
+}
+
+cluster_sessions <- function(sessions, cluster_id) {
+  if (is.null(sessions) || nrow(sessions) == 0) return(sessions)
+  sessions[as.character(sessions$cluster_id) == as.character(cluster_id), , drop = FALSE]
+}
+
+mics_for_cluster <- function(mic_data, cluster_id) {
+  if (is.null(mic_data) || nrow(mic_data) == 0) return(mic_data)
+  if (!"cluster_id" %in% names(mic_data)) {
+    stop("Mic data are missing cluster_id.")
+  }
+  mic_data[as.character(mic_data$cluster_id) == as.character(cluster_id), , drop = FALSE]
+}
+
+first_session_with_detections <- function(sessions) {
+  if (is.null(sessions) || nrow(sessions) == 0) return(1L)
+  if (!"n_detections" %in% names(sessions)) return(1L)
+  indices <- which(!is.na(sessions$n_detections) & sessions$n_detections > 0)
+  if (length(indices) > 0) indices[[1]] else 1L
+}
+
+bounded_navigation_index <- function(index, direction, n_items) {
+  if (n_items <= 0) return(1L)
+  min(n_items, max(1L, as.integer(index) + if (direction < 0) -1L else 1L))
 }
 
 compute_spectrogram_matrix <- function(samples, sample_rate, window_size = 1024, overlap = 0.75, freq_min_hz = 100, freq_max_hz = 8000) {

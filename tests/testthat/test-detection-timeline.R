@@ -99,6 +99,87 @@ test_that("detections are assigned to real recording sessions", {
   expect_equal(attr(mapped, "recorder_levels"), c("NCNX06a", "NCNX06b"))
 })
 
+test_that("recording sessions are built independently within detector clusters", {
+  intervals <- data.frame(
+    cluster_id = c("06", "06", "12", "12"),
+    recording_start_utc = as.POSIXct(
+      c(
+        "2026-01-01 06:00:00", "2026-01-01 18:00:00",
+        "2026-01-01 06:00:00", "2026-01-01 18:00:00"
+      ),
+      tz = "UTC"
+    ),
+    recording_stop_utc = as.POSIXct(
+      c(
+        "2026-01-01 08:00:00", "2026-01-01 20:00:00",
+        "2026-01-01 08:00:00", "2026-01-01 20:00:00"
+      ),
+      tz = "UTC"
+    )
+  )
+
+  sessions <- build_recording_sessions(intervals, gap_seconds = 30 * 60)
+
+  expect_equal(nrow(sessions), 4L)
+  expect_equal(sessions$cluster_id, c("06", "06", "12", "12"))
+  expect_equal(sessions$session_index, c(1L, 2L, 1L, 2L))
+  expect_equal(
+    sessions$session_id,
+    c("cluster_06_session_1", "cluster_06_session_2", "cluster_12_session_1", "cluster_12_session_2")
+  )
+})
+
+test_that("cluster-aware assignment cannot cross matching time intervals", {
+  sessions <- data.frame(
+    cluster_id = c("06", "12"),
+    session_index = c(1L, 1L),
+    session_id = c("cluster_06_session_1", "cluster_12_session_1"),
+    real_start = as.POSIXct(rep("2026-01-01 06:00:00", 2), tz = "UTC"),
+    real_stop = as.POSIXct(rep("2026-01-01 08:00:00", 2), tz = "UTC")
+  )
+  detections <- data.frame(
+    rec_id = c("six", "twelve"),
+    mic_id = c("NCNX06a", "NCNX12a"),
+    cluster_id = c("06", "12"),
+    toa = as.POSIXct(rep("2026-01-01 07:00:00", 2), tz = "UTC")
+  )
+
+  mapped <- assign_detections_to_sessions(detections, sessions)
+
+  expect_equal(mapped$session_id, sessions$session_id)
+  expect_equal(mapped$recorder_lane, c(1L, 1L))
+})
+
+test_that("cluster navigation helpers order labels and bound indices", {
+  sessions <- data.frame(
+    cluster_id = c("12", "02", "06"),
+    n_detections = c(0L, 3L, 2L)
+  )
+  cluster_six_sessions <- data.frame(n_detections = c(0L, 4L, 2L))
+
+  expect_equal(ordered_cluster_ids(sessions), c("02", "06", "12"))
+  expect_equal(cluster_display_label("06"), "NCNX06")
+  expect_equal(cluster_display_label(6), "NCNX06")
+  expect_equal(first_session_with_detections(cluster_six_sessions), 2L)
+  expect_equal(bounded_navigation_index(1L, -1L, 3L), 1L)
+  expect_equal(bounded_navigation_index(2L, 1L, 3L), 3L)
+  expect_equal(bounded_navigation_index(3L, 1L, 3L), 3L)
+})
+
+test_that("map microphone filtering returns only the active cluster", {
+  mics <- data.frame(
+    mic_id = c("NCNX06a", "NCNX06b", "NCNX12a"),
+    cluster_id = c("06", "06", "12"),
+    lat = c(18.1, 18.2, 19.1),
+    lng = c(104.1, 104.2, 105.1)
+  )
+
+  current <- mics_for_cluster(mics, "06")
+
+  expect_equal(current$mic_id, c("NCNX06a", "NCNX06b"))
+  expect_true(all(current$cluster_id == "06"))
+})
+
 test_that("spectrogram matrix dimensions match time and frequency axes", {
   samples <- sin(seq(0, 8 * pi, length.out = 2048))
 

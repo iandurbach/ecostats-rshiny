@@ -72,7 +72,7 @@ mod_detection_timeline_ui <- function(id) {
         display: flex;
         align-items: center;
         gap: 10px;
-        height: 40px;
+        height: 66px;
         margin-bottom: 6px;
       }
       .app-title {
@@ -85,8 +85,21 @@ mod_detection_timeline_ui <- function(id) {
         --left-pane-width: 54%;
         display: grid;
         grid-template-columns: minmax(520px, var(--left-pane-width)) 8px minmax(420px, 1fr);
-        height: calc(100% - 46px);
+        height: calc(100% - 72px);
         min-height: 0;
+      }
+      .header-navigation {
+        display: grid;
+        gap: 4px;
+      }
+      .header-navigation-row {
+        display: flex;
+        gap: 4px;
+      }
+      .header-navigation-row .btn {
+        padding: 3px 8px;
+        font-size: 12px;
+        line-height: 1.35;
       }
       .left-workspace,
       .spectro-pane {
@@ -352,8 +365,19 @@ mod_detection_timeline_ui <- function(id) {
           div(
             class = "app-header",
             div(class = "app-title", "vocomatcher"),
-            actionButton(ns("prev_session"), "Previous session"),
-            actionButton(ns("next_session"), "Next session"),
+            div(
+              class = "header-navigation",
+              div(
+                class = "header-navigation-row",
+                actionButton(ns("prev_cluster"), "Previous cluster", class = "btn-sm"),
+                actionButton(ns("next_cluster"), "Next cluster", class = "btn-sm")
+              ),
+              div(
+                class = "header-navigation-row",
+                actionButton(ns("prev_session"), "Previous session", class = "btn-sm"),
+                actionButton(ns("next_session"), "Next session", class = "btn-sm")
+              )
+            ),
             tags$span(textOutput(ns("session_summary"), inline = TRUE))
           ),
           div(
@@ -440,7 +464,8 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     mic_data <- reactiveVal(NULL)
     timeline_data <- reactiveVal(NULL)
     sessions_data <- reactiveVal(NULL)
-    recorder_levels <- reactiveVal(character(0))
+    cluster_ids_data <- reactiveVal(character(0))
+    current_cluster_index <- reactiveVal(1L)
     current_session_index <- reactiveVal(1L)
     spectro_zoom <- reactiveVal(1)
     group_membership <- reactiveVal(empty_group_membership())
@@ -580,7 +605,6 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
           gap_seconds = session_gap_minutes * 60
         )
         timeline <- assign_detections_to_sessions(parsed_rec_data, sessions)
-        levels <- attr(timeline, "recorder_levels")
         session_counts <- timeline |>
           dplyr::filter(!is.na(session_id)) |>
           dplyr::count(session_id, name = "n_detections")
@@ -590,7 +614,16 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
         if (nrow(sessions) == 0) {
           stop("No recording sessions were found in Sound_Acquisition.")
         }
-        list(mic_data = db_data$micData, timeline = timeline, sessions = sessions, levels = levels)
+        cluster_ids <- ordered_cluster_ids(sessions)
+        if (length(cluster_ids) == 0) {
+          stop("No detector clusters were found in the selected databases.")
+        }
+        list(
+          mic_data = db_data$micData,
+          timeline = timeline,
+          sessions = sessions,
+          cluster_ids = cluster_ids
+        )
       }, error = function(e) e)
 
       if (inherits(loaded, "error")) {
@@ -602,9 +635,10 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       mic_data(loaded$mic_data)
       timeline_data(loaded$timeline)
       sessions_data(loaded$sessions)
-      recorder_levels(loaded$levels)
-      first_with_detections <- which(loaded$sessions$n_detections > 0)
-      current_session_index(if (length(first_with_detections) > 0) first_with_detections[[1]] else 1L)
+      cluster_ids_data(loaded$cluster_ids)
+      current_cluster_index(1L)
+      initial_sessions <- cluster_sessions(loaded$sessions, loaded$cluster_ids[[1]])
+      current_session_index(first_session_with_detections(initial_sessions))
       reset_workspace_state()
       showNotification(
         paste("Loaded", nrow(loaded$timeline), "detections from", length(db_paths), "database(s)."),
@@ -628,24 +662,70 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       paste0(nrow(groups_df()), " grouped rows | ", nrow(removed_points_df()), " removed rows")
     })
 
-    observeEvent(input$prev_session, {
-      sessions <- sessions_data()
-      req(sessions)
-      current_session_index(max(1L, current_session_index() - 1L))
+    reset_navigation_view <- function() {
       current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
       auto_group_cursor(NULL)
+    }
+
+    current_cluster_id <- reactive({
+      ids <- cluster_ids_data()
+      req(length(ids) > 0)
+      ids[[current_cluster_index()]]
+    })
+
+    current_cluster_sessions <- reactive({
+      sessions <- sessions_data()
+      req(sessions)
+      cluster_sessions(sessions, current_cluster_id())
+    })
+
+    recorder_levels <- reactive({
+      timeline <- timeline_data()
+      if (is.null(timeline) || length(cluster_ids_data()) == 0) return(character(0))
+      sort(unique(as.character(
+        timeline$mic_id[as.character(timeline$cluster_id) == current_cluster_id()]
+      )))
+    })
+
+    current_cluster_mics <- reactive({
+      mics <- mic_data()
+      if (is.null(mics)) return(NULL)
+      mics_for_cluster(mics, current_cluster_id())
+    })
+
+    change_cluster <- function(direction) {
+      ids <- cluster_ids_data()
+      req(length(ids) > 0)
+      next_index <- bounded_navigation_index(current_cluster_index(), direction, length(ids))
+      if (next_index == current_cluster_index()) return()
+      current_cluster_index(next_index)
+      sessions <- cluster_sessions(sessions_data(), ids[[next_index]])
+      current_session_index(first_session_with_detections(sessions))
+      reset_navigation_view()
+    }
+
+    observeEvent(input$prev_cluster, {
+      change_cluster(-1L)
+    })
+
+    observeEvent(input$next_cluster, {
+      change_cluster(1L)
+    })
+
+    observeEvent(input$prev_session, {
+      sessions <- current_cluster_sessions()
+      req(sessions)
+      current_session_index(bounded_navigation_index(current_session_index(), -1L, nrow(sessions)))
+      reset_navigation_view()
     })
 
     observeEvent(input$next_session, {
-      sessions <- sessions_data()
+      sessions <- current_cluster_sessions()
       req(sessions)
-      current_session_index(min(nrow(sessions), current_session_index() + 1L))
-      current_review_group_id(NULL)
-      action_selected_rec_ids(character(0))
-      current_x_range(NULL)
-      auto_group_cursor(NULL)
+      current_session_index(bounded_navigation_index(current_session_index(), 1L, nrow(sessions)))
+      reset_navigation_view()
     })
 
     update_spectro_zoom <- function(delta) {
@@ -682,7 +762,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     }, ignoreNULL = TRUE)
 
     current_session <- reactive({
-      sessions <- sessions_data()
+      sessions <- current_cluster_sessions()
       req(sessions)
       sessions[current_session_index(), , drop = FALSE]
     })
@@ -691,7 +771,11 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       timeline <- timeline_data()
       req(timeline)
       timeline |>
-        dplyr::filter(session_id == current_session()$session_id[[1]]) |>
+        dplyr::filter(
+          cluster_id == current_cluster_id(),
+          session_id == current_session()$session_id[[1]]
+        ) |>
+        dplyr::mutate(recorder_lane = match(mic_id, recorder_levels())) |>
         dplyr::arrange(toa, mic_id)
     })
 
@@ -711,11 +795,13 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       sessions <- sessions_data()
       if (is.null(sessions)) return("No data loaded")
       row <- current_session()
+      cluster_session_rows <- current_cluster_sessions()
       paste0(
-        "Session ",
+        cluster_display_label(current_cluster_id()),
+        " | Session ",
         current_session_index(),
         " of ",
-        nrow(sessions),
+        nrow(cluster_session_rows),
         ": ",
         session_title(row),
         " | ",
@@ -870,7 +956,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     outputOptions(output, "selection_map", suspendWhenHidden = FALSE)
 
     observe({
-      mics <- mic_data()
+      mics <- current_cluster_mics()
       if (is.null(mics)) return()
       valid_mics <- mics[
         !is.na(mics$lat) & !is.na(mics$lng),
@@ -901,7 +987,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
 
     observe({
       rows <- selected_rows()
-      mics <- mic_data()
+      mics <- current_cluster_mics()
       req(mics)
       arrows <- tryCatch(
         prepare_bearing_arrows(rows, mics, suspect_bearing_state()),
@@ -1093,7 +1179,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       proposals <- tryCatch(
         propose_session_groups(
           session_rows = dat,
-          mics = mic_data(),
+          mics = current_cluster_mics(),
           group_membership = group_membership(),
           removed_membership = removed_membership(),
           start_time = start_time
