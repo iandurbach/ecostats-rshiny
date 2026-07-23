@@ -128,23 +128,37 @@ mod_detection_timeline_ui <- function(id) {
         width: 100% !important;
       }
       .actions-wrap {
-        display: grid;
-        grid-template-columns: 280px 1fr;
-        gap: 8px 10px;
-        align-items: end;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+        min-height: 0;
       }
       .notes-compact .form-group {
         margin-bottom: 0;
       }
       .notes-compact textarea {
-        height: 44px;
+        width: 180px;
+        height: 30px;
+        min-height: 30px;
+        padding: 3px 7px;
+        font-size: 12px;
         resize: none;
+      }
+      .actions-spacer {
+        width: 10px;
+        flex: 0 0 10px;
       }
       .button-row {
         display: flex;
         align-items: center;
-        gap: 6px;
+        gap: 4px;
         flex-wrap: wrap;
+      }
+      .button-row .btn {
+        padding: 3px 8px;
+        font-size: 12px;
+        line-height: 1.35;
       }
       .status-row {
         font-size: 13px;
@@ -322,7 +336,10 @@ mod_detection_timeline_ui <- function(id) {
             div(
               class = "sidebar-section",
               div(class = "sidebar-label", "Export"),
+              shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE),
               downloadButton(ns("export_groups"), "Export RData"),
+              downloadButton(ns("export_acre_inputs"), "Export acre inputs"),
+              downloadButton(ns("export_acre_script"), "Export acre script"),
               div(class = "sidebar-status", textOutput(ns("export_status")))
             )
           )
@@ -346,23 +363,32 @@ mod_detection_timeline_ui <- function(id) {
                 div(
                   div(
                     class = "actions-wrap",
-                    div(class = "notes-compact", textAreaInput(ns("action_notes"), "Notes", value = "", rows = 1)),
                     div(
+                      class = "button-row",
+                      actionButton(ns("group_selected"), "Group", class = "btn-sm"),
+                      actionButton(ns("ungroup_selected"), "Ungroup", class = "btn-sm"),
+                      actionButton(ns("remove_selected"), "Remove", class = "btn-sm"),
+                      actionButton(ns("clear_selection"), "Clear selection", class = "btn-sm"),
+                      div(class = "actions-spacer"),
+                      actionButton(ns("prev_group"), "Previous group", class = "btn-sm"),
+                      actionButton(ns("next_group"), "Next group", class = "btn-sm"),
+                      div(class = "actions-spacer"),
                       div(
-                        class = "button-row",
-                        actionButton(ns("group_selected"), "Group"),
-                        actionButton(ns("remove_selected"), "Remove"),
-                        actionButton(ns("ungroup_selected"), "Ungroup"),
-                        actionButton(ns("clear_selection"), "Clear selection"),
-                        actionButton(ns("prev_group"), "Previous group"),
-                        actionButton(ns("next_group"), "Next group")
-                      ),
-                      div(
-                        class = "status-row",
-                        tags$span(textOutput(ns("action_summary"), inline = TRUE)),
-                        tags$span(" | "),
-                        tags$span(textOutput(ns("group_review_summary"), inline = TRUE))
+                        class = "notes-compact",
+                        textAreaInput(
+                          ns("action_notes"),
+                          label = NULL,
+                          value = "",
+                          rows = 1,
+                          placeholder = "Notes"
+                        )
                       )
+                    ),
+                    div(
+                      class = "status-row",
+                      tags$span(textOutput(ns("action_summary"), inline = TRUE)),
+                      tags$span(" | "),
+                      tags$span(textOutput(ns("group_review_summary"), inline = TRUE))
                     )
                   )
                 )
@@ -399,6 +425,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
   moduleServer(id, function(input, output, session) {
     volumes <- c(Home = fs::path_home(), shinyFiles::getVolumes()())
     shinyFileChoose(input, "databases", session = session, roots = volumes, filetypes = c("sqlite3"))
+    shinyFileChoose(input, "existing_groups", session = session, roots = volumes, filetypes = c("RData", "rda"))
     shinyFiles::shinyDirChoose(input, "wav_root", session = session, roots = volumes, allowDirCreate = FALSE)
 
     selected_db_paths <- reactiveVal(character(0))
@@ -434,6 +461,69 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       } else {
         selected_wav_root(dir_path)
       }
+    })
+
+    observeEvent(input$existing_groups, {
+      req(!is.integer(input$existing_groups))
+      timeline <- timeline_data()
+      if (is.null(timeline)) {
+        showNotification("Load detection data before loading existing groups.", type = "warning")
+        return()
+      }
+
+      f <- shinyFiles::parseFilePaths(volumes, input$existing_groups)
+      if (nrow(f) == 0 || is.na(f$datapath[[1]])) {
+        showNotification("Could not read grouping file path.", type = "error")
+        return()
+      }
+
+      loaded <- tryCatch({
+        env <- new.env(parent = emptyenv())
+        load(normalizePath(f$datapath[[1]], mustWork = TRUE), envir = env)
+        if (!exists("groups", envir = env, inherits = FALSE)) {
+          stop("Grouping file is missing object `groups`.")
+        }
+        groups <- get("groups", envir = env, inherits = FALSE)
+        removed_points <- if (exists("removed_points", envir = env, inherits = FALSE)) {
+          get("removed_points", envir = env, inherits = FALSE)
+        } else {
+          empty_removed_detections()
+        }
+        gm <- import_group_membership(groups, timeline)
+        rm <- import_removed_membership(removed_points, timeline)
+        if (any(gm$rec_id %in% rm$rec_id)) {
+          stop("Loaded file marks at least one detection as both grouped and removed.")
+        }
+        list(group_membership = gm, removed_membership = rm)
+      }, error = function(e) e)
+
+      if (inherits(loaded, "error")) {
+        showNotification(conditionMessage(loaded), type = "error", duration = 10)
+        return()
+      }
+
+      group_membership(loaded$group_membership)
+      removed_membership(loaded$removed_membership)
+      suspect_bearing_state(dplyr::bind_rows(
+        loaded$group_membership[, c("rec_id", "suspect_bearing"), drop = FALSE],
+        loaded$removed_membership[, c("rec_id", "suspect_bearing"), drop = FALSE]
+      ))
+      next_id <- if (nrow(loaded$group_membership) == 0) 1L else max(loaded$group_membership$group_ID, na.rm = TRUE) + 1L
+      next_group_id(as.integer(next_id))
+      current_review_group_id(NULL)
+      action_selected_rec_ids(character(0))
+      current_x_range(NULL)
+      selection_revision(selection_revision() + 1L)
+      showNotification(
+        paste(
+          "Loaded",
+          length(unique(loaded$group_membership$group_ID)),
+          "group(s) and",
+          nrow(loaded$removed_membership),
+          "removed detection(s)."
+        ),
+        type = "message"
+      )
     })
 
     reset_workspace_state <- function() {
@@ -532,6 +622,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       sessions <- sessions_data()
       req(sessions)
       current_session_index(max(1L, current_session_index() - 1L))
+      current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
     })
@@ -540,6 +631,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       sessions <- sessions_data()
       req(sessions)
       current_session_index(min(nrow(sessions), current_session_index() + 1L))
+      current_review_group_id(NULL)
       action_selected_rec_ids(character(0))
       current_x_range(NULL)
     })
@@ -621,9 +713,10 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       dat <- session_data()
       selection_revision()
       dat$status <- detection_point_status(dat$rec_id, group_membership(), removed_membership())
+      dat <- add_session_group_display(dat, group_membership())
       dat$selected_color <- ifelse(
         dat$status == "grouped",
-        "rgba(144,238,144,0.5)",
+        "rgba(144,238,144,0.2)",
         ifelse(dat$status == "removed", "rgba(128,128,128,0.1)", "#d7191c")
       )
       action_selected <- action_selected_rec_ids()
@@ -657,7 +750,14 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
             x = ~toa,
             y = ~recorder_lane,
             key = ~rec_id,
-            text = ~paste0(rec_id, "<br>", mic_id, "<br>", format(toa, "%H:%M:%S", tz = "UTC")),
+            text = ~paste0(
+              rec_id,
+              "<br>",
+              mic_id,
+              "<br>",
+              format(toa, "%H:%M:%S", tz = "UTC"),
+              ifelse(nzchar(group_label), paste0("<br>", group_label), "")
+            ),
             hoverinfo = "text",
             marker = list(
               size = 16,
@@ -675,9 +775,9 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
             x = ~toa,
             y = ~recorder_lane,
             key = ~rec_id,
-            text = ~paste0(rec_id, "<br>", mic_id, "<br>", format(toa, "%H:%M:%S", tz = "UTC")),
+            text = ~paste0(rec_id, "<br>", mic_id, "<br>", format(toa, "%H:%M:%S", tz = "UTC"), "<br>", group_label),
             hoverinfo = "text",
-            marker = list(size = 12, color = "rgba(144,238,144,0.5)"),
+            marker = list(size = 12, color = "rgba(144,238,144,0.2)"),
             showlegend = FALSE
           )
       }
@@ -931,39 +1031,23 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
 
     review_group <- function(direction) {
       gm <- group_membership()
-      group_ids <- sort(unique(gm$group_ID))
-      if (length(group_ids) == 0) {
-        showNotification("No groups have been created yet.", type = "warning")
+      dat <- session_data()
+      group_id <- next_session_group_id(current_review_group_id(), direction, dat, gm)
+      if (length(group_id) == 0) {
+        showNotification("No groups in the current session.", type = "warning")
         return()
       }
 
-      current <- current_review_group_id()
-      if (is.null(current) || !current %in% group_ids) {
-        group_id <- if (direction > 0) group_ids[[1]] else utils::tail(group_ids, 1)
-      } else {
-        current_index <- match(current, group_ids)
-        next_index <- ((current_index - 1L + direction) %% length(group_ids)) + 1L
-        group_id <- group_ids[[next_index]]
-      }
-
-      timeline <- timeline_data()
-      sessions <- sessions_data()
-      req(timeline, sessions)
       group_rec_ids <- gm$rec_id[gm$group_ID == group_id]
-      rows <- timeline[timeline$rec_id %in% group_rec_ids, , drop = FALSE]
+      rows <- dat[dat$rec_id %in% group_rec_ids, , drop = FALSE]
       rows <- rows[order(rows$toa, rows$mic_id), , drop = FALSE]
       if (nrow(rows) == 0) {
         showNotification(paste("Group", group_id, "has no matching detections."), type = "warning")
         return()
       }
 
-      session_id <- rows$session_id[[1]]
-      session_index <- match(session_id, sessions$session_id)
-      if (!is.na(session_index)) {
-        current_session_index(session_index)
-        current_x_range(group_review_range(rows, sessions[session_index, , drop = FALSE]))
-      }
-      action_selected_rec_ids(group_rec_ids)
+      current_x_range(group_review_range(rows, current_session()))
+      action_selected_rec_ids(rows$rec_id)
       current_review_group_id(group_id)
       selection_revision(selection_revision() + 1L)
     }
@@ -983,11 +1067,12 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
 
     output$group_review_summary <- renderText({
       group_id <- current_review_group_id()
-      group_count <- length(unique(group_membership()$group_ID))
+      group_ids <- session_group_ids(session_data(), group_membership())
+      group_count <- length(group_ids)
       if (is.null(group_id) || group_count == 0) {
-        return(paste0(group_count, " group(s)"))
+        return(paste0(group_count, " group(s) in session"))
       }
-      paste0("Reviewing group ", group_id, " | ", group_count, " group(s)")
+      paste0("Reviewing group ", group_id, " | ", group_count, " group(s) in session")
     })
 
     output$action_summary <- renderText({
@@ -1009,6 +1094,39 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
         groups <- groups_df()
         removed_points <- removed_points_df()
         save(groups, removed_points, file = file)
+      }
+    )
+
+    acre_bundle <- reactive({
+      timeline <- timeline_data()
+      mics <- mic_data()
+      sessions <- sessions_data()
+      req(timeline, mics, sessions)
+      build_acre_export_bundle(
+        timeline_data = apply_suspect_bearing_state(timeline, suspect_bearing_state()),
+        mic_data = mics,
+        sessions = sessions,
+        group_membership = group_membership(),
+        removed_membership = removed_membership(),
+        source_db_paths = selected_db_paths()
+      )
+    })
+
+    output$export_acre_inputs <- downloadHandler(
+      filename = function() {
+        paste0("acre_inputs_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".RData")
+      },
+      content = function(file) {
+        save_acre_export_bundle(acre_bundle(), file)
+      }
+    )
+
+    output$export_acre_script <- downloadHandler(
+      filename = function() {
+        paste0("fit_acre_", format(Sys.time(), "%Y%m%d_%H%M%S"), ".R")
+      },
+      content = function(file) {
+        writeLines(acre_script_text(), file, useBytes = TRUE)
       }
     )
 

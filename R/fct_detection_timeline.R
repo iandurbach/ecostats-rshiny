@@ -399,6 +399,305 @@ export_removed_detections <- function(removed_membership, timeline_data) {
   dplyr::bind_rows(pieces)
 }
 
+infer_wgs84_utm <- function(lng, lat) {
+  lng <- suppressWarnings(as.numeric(lng))
+  lat <- suppressWarnings(as.numeric(lat))
+  valid <- is.finite(lng) & is.finite(lat)
+  if (!any(valid)) {
+    stop("Mic data must include at least one finite lat/lng pair for UTM conversion.")
+  }
+  median_lng <- stats::median(lng[valid])
+  median_lat <- stats::median(lat[valid])
+  zone <- floor((median_lng + 180) / 6) + 1
+  zone <- min(60, max(1, zone))
+  northern <- median_lat >= 0
+  epsg <- if (northern) 32600 + zone else 32700 + zone
+  list(zone = zone, hemisphere = if (northern) "north" else "south", epsg = epsg)
+}
+
+lonlat_to_utm <- function(lng, lat, zone = infer_wgs84_utm(lng, lat)$zone, northern = TRUE) {
+  lng <- suppressWarnings(as.numeric(lng))
+  lat <- suppressWarnings(as.numeric(lat))
+  if (any(!is.finite(lng) | !is.finite(lat))) {
+    stop("All mic lat/lng values must be finite for UTM conversion.")
+  }
+
+  a <- 6378137
+  f <- 1 / 298.257223563
+  k0 <- 0.9996
+  e2 <- f * (2 - f)
+  ep2 <- e2 / (1 - e2)
+  lat_rad <- lat * pi / 180
+  lng_rad <- lng * pi / 180
+  lon0 <- ((zone - 1) * 6 - 180 + 3) * pi / 180
+
+  n <- a / sqrt(1 - e2 * sin(lat_rad)^2)
+  t <- tan(lat_rad)^2
+  c <- ep2 * cos(lat_rad)^2
+  aa <- cos(lat_rad) * (lng_rad - lon0)
+  m <- a * (
+    (1 - e2 / 4 - 3 * e2^2 / 64 - 5 * e2^3 / 256) * lat_rad -
+      (3 * e2 / 8 + 3 * e2^2 / 32 + 45 * e2^3 / 1024) * sin(2 * lat_rad) +
+      (15 * e2^2 / 256 + 45 * e2^3 / 1024) * sin(4 * lat_rad) -
+      (35 * e2^3 / 3072) * sin(6 * lat_rad)
+  )
+
+  x <- k0 * n * (
+    aa + (1 - t + c) * aa^3 / 6 +
+      (5 - 18 * t + t^2 + 72 * c - 58 * ep2) * aa^5 / 120
+  ) + 500000
+  y <- k0 * (
+    m + n * tan(lat_rad) * (
+      aa^2 / 2 +
+        (5 - t + 9 * c + 4 * c^2) * aa^4 / 24 +
+        (61 - 58 * t + t^2 + 600 * c - 330 * ep2) * aa^6 / 720
+    )
+  )
+  if (!northern) y <- y + 10000000
+
+  data.frame(x = x, y = y)
+}
+
+prepare_acre_traps <- function(mic_data) {
+  required <- c("mic_id", "lat", "lng")
+  missing_required <- setdiff(required, names(mic_data))
+  if (length(missing_required) > 0) {
+    stop(paste("Mic data are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  mics <- unique(mic_data[required])
+  if (anyDuplicated(mics$mic_id)) {
+    stop("Mic data contain duplicate mic IDs with different coordinates.")
+  }
+  mics <- mics[order(mics$mic_id), , drop = FALSE]
+  utm <- infer_wgs84_utm(mics$lng, mics$lat)
+  coords <- lonlat_to_utm(mics$lng, mics$lat, zone = utm$zone, northern = utm$hemisphere == "north")
+  traps <- data.frame(x = coords$x, y = coords$y, stringsAsFactors = FALSE)
+  lookup <- data.frame(
+    trap = seq_len(nrow(mics)),
+    mic_id = as.character(mics$mic_id),
+    lat = as.numeric(mics$lat),
+    lng = as.numeric(mics$lng),
+    x = coords$x,
+    y = coords$y,
+    stringsAsFactors = FALSE
+  )
+  list(traps = traps, lookup = lookup, utm = utm)
+}
+
+build_acre_capture_ids <- function(rows, group_membership) {
+  group_lookup <- group_membership[!duplicated(group_membership$rec_id), c("group_ID", "rec_id"), drop = FALSE]
+  rows <- dplyr::left_join(rows, group_lookup, by = "rec_id")
+  grouped_ids <- sort(unique(rows$group_ID[!is.na(rows$group_ID)]))
+  group_id_map <- data.frame(
+    group_ID = grouped_ids,
+    ID = seq_along(grouped_ids),
+    stringsAsFactors = FALSE
+  )
+  rows <- dplyr::left_join(rows, group_id_map, by = "group_ID")
+  singleton <- is.na(rows$ID)
+  rows$ID[singleton] <- length(grouped_ids) + seq_len(sum(singleton))
+  rows$acre_source <- ifelse(singleton, "singleton", paste0("group_", rows$group_ID))
+  rows
+}
+
+build_acre_export_bundle <- function(timeline_data, mic_data, sessions, group_membership, removed_membership, source_db_paths = character(0)) {
+  required_timeline <- c("rec_id", "mic_id", "toa", "bearing", "session_id")
+  missing_timeline <- setdiff(required_timeline, names(timeline_data))
+  if (length(missing_timeline) > 0) {
+    stop(paste("Timeline data are missing column(s):", paste(missing_timeline, collapse = ", ")))
+  }
+  required_sessions <- c("session_id", "real_start", "duration_seconds")
+  missing_sessions <- setdiff(required_sessions, names(sessions))
+  if (length(missing_sessions) > 0) {
+    stop(paste("Session data are missing column(s):", paste(missing_sessions, collapse = ", ")))
+  }
+
+  active_rows <- timeline_data[!timeline_data$rec_id %in% removed_membership$rec_id, , drop = FALSE]
+  if (nrow(active_rows) == 0) {
+    stop("No nonremoved detections are available for acre export.")
+  }
+  if (any(is.na(active_rows$session_id))) {
+    stop("Cannot export acre inputs because at least one nonremoved detection is outside a recording session.")
+  }
+  if (anyDuplicated(group_membership$rec_id)) {
+    stop("At least one detection is assigned to more than one group.")
+  }
+  if (any(group_membership$rec_id %in% removed_membership$rec_id)) {
+    stop("At least one detection is both grouped and removed.")
+  }
+
+  trap_info <- prepare_acre_traps(mic_data)
+  sessions <- sessions[sessions$session_id %in% unique(active_rows$session_id), , drop = FALSE]
+  session_lookup <- data.frame(
+    session_id = as.character(sessions$session_id),
+    session = seq_len(nrow(sessions)),
+    real_start = sessions$real_start,
+    duration_seconds = as.numeric(sessions$duration_seconds),
+    stringsAsFactors = FALSE
+  )
+  active_rows <- dplyr::left_join(active_rows, session_lookup, by = "session_id")
+  active_rows <- dplyr::left_join(active_rows, trap_info$lookup[, c("trap", "mic_id"), drop = FALSE], by = "mic_id")
+  if (any(is.na(active_rows$session)) || any(is.na(active_rows$trap))) {
+    stop("Could not match all detections to acre sessions and traps.")
+  }
+
+  active_rows <- build_acre_capture_ids(active_rows, group_membership)
+  captures <- data.frame(
+    session = as.integer(active_rows$session),
+    ID = as.integer(active_rows$ID),
+    trap = as.integer(active_rows$trap),
+    bearing = as.numeric(active_rows$bearing) * pi / 180,
+    toa = as.numeric(difftime(active_rows$toa, active_rows$real_start, units = "secs")),
+    stringsAsFactors = FALSE
+  )
+  captures <- captures[order(captures$session, captures$ID, captures$trap), , drop = FALSE]
+
+  capture_lookup <- data.frame(
+    rec_id = as.character(active_rows$rec_id),
+    acre_ID = as.integer(active_rows$ID),
+    acre_source = as.character(active_rows$acre_source),
+    session = as.integer(active_rows$session),
+    trap = as.integer(active_rows$trap),
+    stringsAsFactors = FALSE
+  )
+  capture_lookup <- capture_lookup[order(capture_lookup$session, capture_lookup$acre_ID, capture_lookup$trap), , drop = FALSE]
+
+  metadata <- list(
+    generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
+    utm = trap_info$utm,
+    trap_lookup = trap_info$lookup,
+    capture_lookup = capture_lookup,
+    source_db_paths = as.character(source_db_paths),
+    included_auxiliary = c("bearing", "toa"),
+    omitted_auxiliary = c("dist", "ss"),
+    notes = "Acre captures include all nonremoved detections. Grouped detections share an ID; ungrouped detections are singleton IDs."
+  )
+
+  list(
+    captures = captures,
+    traps = trap_info$traps,
+    sessions = session_lookup,
+    survey.length = session_lookup$duration_seconds,
+    metadata = metadata
+  )
+}
+
+save_acre_export_bundle <- function(bundle, file) {
+  captures <- bundle$captures
+  traps <- bundle$traps
+  sessions <- bundle$sessions
+  survey.length <- bundle$survey.length
+  metadata <- bundle$metadata
+  save(captures, traps, sessions, survey.length, metadata, file = file)
+}
+
+acre_script_text <- function(input_file = "acre_inputs.RData", buffer_m = 1000) {
+  paste(
+    "# Acre model fitting script generated by vocomatcher",
+    "",
+    "library(acre)",
+    "",
+    sprintf("input_file <- %s", deparse(input_file)),
+    "if (!file.exists(input_file)) input_file <- file.choose()",
+    "load(input_file)",
+    "",
+    "# Review this buffer before serious analysis; it controls the mask around the detector array.",
+    sprintf("buffer_m <- %s", format(buffer_m, scientific = FALSE)),
+    "",
+    "dat <- acre::read.acre(",
+    "  captures = captures,",
+    "  traps = traps,",
+    "  control.mask = list(buffer = buffer_m),",
+    "  survey.length = survey.length",
+    ")",
+    "",
+    "fit <- acre::fit.acre(dat, detfn = \"hn\", tracing = TRUE)",
+    "print(summary(fit))",
+    sep = "\n"
+  )
+}
+
+timeline_detection_keys <- function(timeline_data) {
+  required <- c("rec_id", "mic_id")
+  missing_required <- setdiff(required, names(timeline_data))
+  if (length(missing_required) > 0) {
+    stop(paste("Timeline data are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  detection_ids <- if ("detection_id" %in% names(timeline_data)) timeline_data$detection_id else timeline_data$rec_id
+  paste(as.character(timeline_data$mic_id), as.character(detection_ids), sep = "\r")
+}
+
+action_detection_keys <- function(rows, data_name) {
+  required <- c("detection_ID", "recorder_ID")
+  missing_required <- setdiff(required, names(rows))
+  if (length(missing_required) > 0) {
+    stop(paste(data_name, "are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  paste(as.character(rows$recorder_ID), as.character(rows$detection_ID), sep = "\r")
+}
+
+import_group_membership <- function(groups, timeline_data) {
+  if (is.null(groups)) return(empty_group_membership())
+  if (!is.data.frame(groups)) {
+    stop("Loaded groups must be a data frame.")
+  }
+  if (nrow(groups) == 0) return(empty_group_membership())
+  required <- c("group_ID", "detection_ID", "recorder_ID")
+  missing_required <- setdiff(required, names(groups))
+  if (length(missing_required) > 0) {
+    stop(paste("Loaded groups are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  idx <- match(action_detection_keys(groups, "Loaded groups"), timeline_detection_keys(timeline_data))
+  if (any(is.na(idx))) {
+    stop(paste(sum(is.na(idx)), "loaded grouped detection(s) do not match the current detections."))
+  }
+
+  out <- data.frame(
+    group_ID = as.integer(groups$group_ID),
+    rec_id = as.character(timeline_data$rec_id[idx]),
+    Notes = if ("Notes" %in% names(groups)) as.character(groups$Notes) else rep("", nrow(groups)),
+    suspect_bearing = if ("suspect_bearing" %in% names(groups)) as.logical(groups$suspect_bearing) else rep(FALSE, nrow(groups)),
+    stringsAsFactors = FALSE
+  )
+  if (anyDuplicated(out$rec_id)) {
+    stop("Loaded groups assign at least one detection to more than one group.")
+  }
+  out
+}
+
+import_removed_membership <- function(removed_points, timeline_data) {
+  if (is.null(removed_points)) return(empty_removed_membership())
+  if (!is.data.frame(removed_points)) {
+    stop("Loaded removed points must be a data frame.")
+  }
+  if (nrow(removed_points) == 0) return(empty_removed_membership())
+  required <- c("detection_ID", "recorder_ID")
+  missing_required <- setdiff(required, names(removed_points))
+  if (length(missing_required) > 0) {
+    stop(paste("Loaded removed points are missing column(s):", paste(missing_required, collapse = ", ")))
+  }
+
+  idx <- match(action_detection_keys(removed_points, "Loaded removed points"), timeline_detection_keys(timeline_data))
+  if (any(is.na(idx))) {
+    stop(paste(sum(is.na(idx)), "loaded removed detection(s) do not match the current detections."))
+  }
+
+  out <- data.frame(
+    rec_id = as.character(timeline_data$rec_id[idx]),
+    Notes = if ("Notes" %in% names(removed_points)) as.character(removed_points$Notes) else rep("", nrow(removed_points)),
+    suspect_bearing = if ("suspect_bearing" %in% names(removed_points)) as.logical(removed_points$suspect_bearing) else rep(FALSE, nrow(removed_points)),
+    stringsAsFactors = FALSE
+  )
+  if (anyDuplicated(out$rec_id)) {
+    stop("Loaded removed points contain duplicate detections.")
+  }
+  out
+}
+
 empty_suspect_bearing_state <- function() {
   data.frame(
     rec_id = character(0),
@@ -511,6 +810,86 @@ detection_point_status <- function(rec_ids, group_membership, removed_membership
 selected_group_ids <- function(rec_ids, group_membership) {
   ids <- unique(group_membership$group_ID[group_membership$rec_id %in% rec_ids])
   ids[order(ids)]
+}
+
+session_group_order <- function(session_rows, group_membership) {
+  if (nrow(session_rows) == 0 || nrow(group_membership) == 0) {
+    return(data.frame(group_ID = integer(0), median_toa = as.POSIXct(character(0), tz = "UTC")))
+  }
+  required_rows <- c("rec_id", "toa")
+  required_groups <- c("group_ID", "rec_id")
+  missing_rows <- setdiff(required_rows, names(session_rows))
+  missing_groups <- setdiff(required_groups, names(group_membership))
+  if (length(missing_rows) > 0) stop(paste("Session rows are missing column(s):", paste(missing_rows, collapse = ", ")))
+  if (length(missing_groups) > 0) stop(paste("Group membership is missing column(s):", paste(missing_groups, collapse = ", ")))
+
+  joined <- merge(
+    group_membership[, required_groups, drop = FALSE],
+    session_rows[, required_rows, drop = FALSE],
+    by = "rec_id"
+  )
+  joined <- joined[!is.na(joined$group_ID) & !is.na(joined$toa), , drop = FALSE]
+  if (nrow(joined) == 0) {
+    return(data.frame(group_ID = integer(0), median_toa = as.POSIXct(character(0), tz = "UTC")))
+  }
+
+  medians <- stats::aggregate(
+    as.numeric(joined$toa),
+    by = list(group_ID = joined$group_ID),
+    FUN = stats::median
+  )
+  medians$median_toa <- as.POSIXct(medians$x, origin = "1970-01-01", tz = "UTC")
+  medians <- medians[order(medians$median_toa, medians$group_ID), c("group_ID", "median_toa"), drop = FALSE]
+  rownames(medians) <- NULL
+  medians
+}
+
+session_group_ids <- function(session_rows, group_membership) {
+  session_group_order(session_rows, group_membership)$group_ID
+}
+
+next_session_group_id <- function(current_group_id, direction, session_rows, group_membership) {
+  group_ids <- session_group_ids(session_rows, group_membership)
+  if (length(group_ids) == 0) return(integer(0))
+
+  direction <- if (direction < 0) -1L else 1L
+  current_group_id <- suppressWarnings(as.integer(current_group_id))
+  if (length(current_group_id) != 1 || is.na(current_group_id) || !current_group_id %in% group_ids) {
+    return(if (direction > 0) group_ids[[1]] else utils::tail(group_ids, 1))
+  }
+
+  current_index <- match(current_group_id, group_ids)
+  next_index <- ((current_index - 1L + direction) %% length(group_ids)) + 1L
+  group_ids[[next_index]]
+}
+
+add_session_group_display <- function(session_rows, group_membership) {
+  session_rows$group_ID <- NA_integer_
+  session_rows$group_label <- ""
+  if (nrow(session_rows) == 0 || nrow(group_membership) == 0) return(session_rows)
+
+  order <- session_group_order(session_rows, group_membership)
+  if (nrow(order) == 0) return(session_rows)
+
+  display <- data.frame(
+    group_ID = order$group_ID,
+    group_label = paste0("Group ", order$group_ID),
+    stringsAsFactors = FALSE
+  )
+  lookup <- dplyr::left_join(
+    group_membership[, c("group_ID", "rec_id"), drop = FALSE],
+    display,
+    by = "group_ID"
+  )
+  out <- dplyr::left_join(session_rows, lookup, by = "rec_id")
+  out$group_ID <- out$group_ID.y
+  out$group_label <- out$group_label.y
+  out$group_ID.x <- NULL
+  out$group_ID.y <- NULL
+  out$group_label.x <- NULL
+  out$group_label.y <- NULL
+  out$group_label[is.na(out$group_label)] <- ""
+  out
 }
 
 group_review_range <- function(rows, session_row, min_window_seconds = 30, padding_seconds = 10, padding_fraction = 0.2) {

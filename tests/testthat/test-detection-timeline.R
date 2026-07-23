@@ -216,6 +216,141 @@ test_that("group membership exports keep the requested group data frame shape", 
   expect_equal(grouped$suspect_bearing, c(FALSE, TRUE))
 })
 
+test_that("exported grouped rows import back to group membership", {
+  rows <- data.frame(
+    rec_id = c("NCNX06a_1", "NCNX06b_2", "NCNX06c_3"),
+    detection_id = c(1, 2, 3),
+    mic_id = c("NCNX06a", "NCNX06b", "NCNX06c"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01", "2026-01-01 22:00:30"), tz = "UTC"),
+    Duration = c(4, 5, 6),
+    suspect_bearing = c(FALSE, TRUE, FALSE)
+  )
+  membership <- format_group_membership_rows(rows[1:2, , drop = FALSE], notes = "same call", group_id = 3)
+  grouped <- export_grouped_detections(membership, rows)
+
+  imported <- import_group_membership(grouped, rows)
+
+  expect_equal(imported$group_ID, c(3L, 3L))
+  expect_equal(imported$rec_id, c("NCNX06a_1", "NCNX06b_2"))
+  expect_equal(imported$Notes, c("same call", "same call"))
+  expect_equal(imported$suspect_bearing, c(FALSE, TRUE))
+})
+
+test_that("exported removed rows import back to removed membership", {
+  rows <- data.frame(
+    rec_id = c("NCNX06a_1", "NCNX06b_2"),
+    detection_id = c(1, 2),
+    mic_id = c("NCNX06a", "NCNX06b"),
+    toa = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-01 22:00:01"), tz = "UTC"),
+    Duration = c(4, 5),
+    suspect_bearing = c(FALSE, TRUE)
+  )
+  removed <- format_detection_action_rows(rows[2, , drop = FALSE], notes = "noise")
+
+  imported <- import_removed_membership(removed, rows)
+
+  expect_equal(imported$rec_id, "NCNX06b_2")
+  expect_equal(imported$Notes, "noise")
+  expect_true(imported$suspect_bearing)
+})
+
+test_that("UTM conversion auto-selects WGS84 EPSG and returns metre coordinates", {
+  north <- infer_wgs84_utm(lng = c(104.5, 104.6), lat = c(18.1, 18.2))
+  south <- infer_wgs84_utm(lng = c(104.5, 104.6), lat = c(-18.1, -18.2))
+
+  expect_equal(north$zone, 48)
+  expect_equal(north$epsg, 32648)
+  expect_equal(south$epsg, 32748)
+
+  coords <- lonlat_to_utm(lng = 105, lat = 0, zone = 48, northern = TRUE)
+  expect_equal(coords$x, 500000, tolerance = 1)
+  expect_equal(coords$y, 0, tolerance = 1)
+})
+
+test_that("acre export bundle includes groups and singleton nonremoved detections", {
+  timeline <- data.frame(
+    rec_id = c("a1", "b1", "c1", "d1"),
+    mic_id = c("NCNX06a", "NCNX06b", "NCNX06a", "NCNX06b"),
+    toa = as.POSIXct(
+      c("2026-01-01 22:00:05", "2026-01-01 22:00:07", "2026-01-01 22:01:00", "2026-01-01 22:01:30"),
+      tz = "UTC"
+    ),
+    bearing = c(90, 180, 270, 0),
+    session_id = c("session_1", "session_1", "session_1", "session_1"),
+    stringsAsFactors = FALSE
+  )
+  mics <- data.frame(
+    mic_id = c("NCNX06b", "NCNX06a"),
+    lat = c(18.2, 18.1),
+    lng = c(104.6, 104.5),
+    stringsAsFactors = FALSE
+  )
+  sessions <- data.frame(
+    session_id = c("session_1", "session_2"),
+    real_start = as.POSIXct(c("2026-01-01 22:00:00", "2026-01-02 22:00:00"), tz = "UTC"),
+    duration_seconds = c(3600, 7200),
+    stringsAsFactors = FALSE
+  )
+  grouped <- data.frame(
+    group_ID = c(3L, 3L),
+    rec_id = c("a1", "b1"),
+    Notes = "",
+    suspect_bearing = FALSE,
+    stringsAsFactors = FALSE
+  )
+  removed <- data.frame(
+    rec_id = "d1",
+    Notes = "",
+    suspect_bearing = FALSE,
+    stringsAsFactors = FALSE
+  )
+
+  bundle <- build_acre_export_bundle(timeline, mics, sessions, grouped, removed, source_db_paths = "one.sqlite3")
+
+  expect_named(bundle$captures, c("session", "ID", "trap", "bearing", "toa"))
+  expect_false(any(c("dist", "ss") %in% names(bundle$captures)))
+  expect_equal(nrow(bundle$captures), 3)
+  expect_equal(bundle$captures$ID[bundle$captures$trap %in% c(1L, 2L)][1:2], c(1L, 1L))
+  expect_equal(sort(unique(bundle$captures$ID)), c(1L, 2L))
+  expect_equal(bundle$captures$toa, c(5, 7, 60))
+  expect_equal(bundle$captures$bearing, c(pi / 2, pi, 3 * pi / 2), tolerance = 1e-8)
+  expect_equal(bundle$metadata$utm$epsg, 32648)
+  expect_equal(bundle$metadata$source_db_paths, "one.sqlite3")
+  expect_equal(bundle$survey.length, 3600)
+  expect_equal(nrow(bundle$sessions), 1)
+})
+
+test_that("acre export bundle can be saved as an RData bundle", {
+  bundle <- list(
+    captures = data.frame(session = 1L, ID = 1L, trap = 1L, bearing = 0, toa = 0),
+    traps = data.frame(x = 500000, y = 0),
+    sessions = data.frame(session_id = "session_1", session = 1L, duration_seconds = 60),
+    survey.length = 60,
+    metadata = list(utm = list(epsg = 32648))
+  )
+  out_path <- tempfile(fileext = ".RData")
+
+  save_acre_export_bundle(bundle, out_path)
+  env <- new.env(parent = emptyenv())
+  load(out_path, envir = env)
+
+  expect_true(exists("captures", envir = env, inherits = FALSE))
+  expect_true(exists("traps", envir = env, inherits = FALSE))
+  expect_true(exists("sessions", envir = env, inherits = FALSE))
+  expect_true(exists("survey.length", envir = env, inherits = FALSE))
+  expect_true(exists("metadata", envir = env, inherits = FALSE))
+})
+
+test_that("acre script reads exported inputs and fits a basic half-normal model", {
+  script <- acre_script_text()
+
+  expect_match(script, "library\\(acre\\)")
+  expect_match(script, "acre::read.acre")
+  expect_match(script, "control.mask = list\\(buffer = buffer_m\\)")
+  expect_match(script, "acre::fit.acre\\(dat, detfn = \"hn\"")
+  expect_match(script, "buffer_m <- 1000")
+})
+
 test_that("removed membership exports keep the requested removed data frame shape", {
   rows <- data.frame(
     rec_id = c("NCNX06a_1", "NCNX06b_2"),
@@ -282,6 +417,72 @@ test_that("selected group ids are returned in numeric order", {
   grouped <- data.frame(group_ID = c(3L, 1L, 3L), rec_id = c("a", "b", "c"), Notes = "", stringsAsFactors = FALSE)
 
   expect_equal(selected_group_ids(c("c", "b"), grouped), c(1L, 3L))
+})
+
+test_that("session group order uses only detections in the current session", {
+  rows <- data.frame(
+    rec_id = c("s1_a", "s1_b", "s1_c"),
+    toa = as.POSIXct(
+      c("2026-01-01 22:00:05", "2026-01-01 22:00:15", "2026-01-01 22:00:10"),
+      tz = "UTC"
+    ),
+    stringsAsFactors = FALSE
+  )
+  grouped <- data.frame(
+    group_ID = c(3L, 1L, 2L, 99L),
+    rec_id = c("s1_a", "s1_b", "s1_c", "other_session"),
+    Notes = "",
+    stringsAsFactors = FALSE
+  )
+
+  expect_equal(session_group_ids(rows, grouped), c(3L, 2L, 1L))
+})
+
+test_that("session group navigation wraps within the current session", {
+  rows <- data.frame(
+    rec_id = c("a", "b", "c"),
+    toa = as.POSIXct(
+      c("2026-01-01 22:00:00", "2026-01-01 22:00:10", "2026-01-01 22:00:20"),
+      tz = "UTC"
+    ),
+    stringsAsFactors = FALSE
+  )
+  grouped <- data.frame(
+    group_ID = c(10L, 20L, 30L, 40L),
+    rec_id = c("a", "b", "c", "other_session"),
+    Notes = "",
+    stringsAsFactors = FALSE
+  )
+
+  expect_equal(next_session_group_id(NULL, 1L, rows, grouped), 10L)
+  expect_equal(next_session_group_id(10L, -1L, rows, grouped), 30L)
+  expect_equal(next_session_group_id(30L, 1L, rows, grouped), 10L)
+  expect_equal(next_session_group_id(40L, 1L, rows, grouped), 10L)
+  expect_equal(next_session_group_id(NULL, 1L, rows[FALSE, , drop = FALSE], grouped), integer(0))
+})
+
+test_that("session group display adds group ids and hover labels", {
+  rows <- data.frame(
+    rec_id = c("a", "b", "c", "d"),
+    toa = as.POSIXct(
+      c("2026-01-01 22:00:00", "2026-01-01 22:00:05", "2026-01-01 22:00:10", "2026-01-01 22:00:15"),
+      tz = "UTC"
+    ),
+    stringsAsFactors = FALSE
+  )
+  grouped <- data.frame(
+    group_ID = c(1L, 2L, 3L),
+    rec_id = c("a", "b", "c"),
+    Notes = "",
+    stringsAsFactors = FALSE
+  )
+
+  displayed <- add_session_group_display(rows, grouped)
+
+  expect_equal(displayed$group_ID, c(1L, 2L, 3L, NA_integer_))
+  expect_false("group_color" %in% names(displayed))
+  expect_equal(displayed$group_label[1:3], c("Group 1", "Group 2", "Group 3"))
+  expect_equal(displayed$group_label[4], "")
 })
 
 test_that("group review range pads and clips to session bounds", {
