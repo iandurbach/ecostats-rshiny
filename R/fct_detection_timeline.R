@@ -219,6 +219,20 @@ bounded_navigation_index <- function(index, direction, n_items) {
   min(n_items, max(1L, as.integer(index) + if (direction < 0) -1L else 1L))
 }
 
+spectrogram_window_size <- function(detail = "balanced") {
+  sizes <- c(time = 512L, balanced = 1024L, frequency = 2048L)
+  detail <- as.character(detail %||% "balanced")
+  if (!detail %in% names(sizes)) detail <- "balanced"
+  unname(sizes[[detail]])
+}
+
+spectrogram_image_scale <- function(quality = "standard") {
+  scales <- c(standard = 1L, high = 2L, very_high = 3L)
+  quality <- as.character(quality %||% "standard")
+  if (!quality %in% names(scales)) quality <- "standard"
+  unname(scales[[quality]])
+}
+
 compute_spectrogram_matrix <- function(samples, sample_rate, window_size = 1024, overlap = 0.75, freq_min_hz = 100, freq_max_hz = 8000) {
   hop <- max(1, as.integer(window_size * (1 - overlap)))
   if (length(samples) < window_size) {
@@ -241,11 +255,11 @@ compute_spectrogram_matrix <- function(samples, sample_rate, window_size = 1024,
   )
 }
 
-prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, overlap = 0.75, freq_min_hz = 100, freq_max_hz = 8000) {
+prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, overlap = 0.75, freq_min_hz = 100, freq_max_hz = 8000, buffer_seconds = 0) {
   if (nrow(rows) == 0) {
     stop("No detections selected.")
   }
-  required <- c("rec_id", "mic_id", "raw_toa", "start_frame", "end_frame", "wav_file")
+  required <- c("rec_id", "mic_id", "raw_toa", "start_frame", "end_frame", "wav_file", "sample_rate")
   missing_required <- setdiff(required, names(rows))
   if (length(missing_required) > 0) {
     stop(paste("Selected rows are missing column(s):", paste(missing_required, collapse = ", ")))
@@ -256,14 +270,24 @@ prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, 
   } else {
     rows <- rows[order(rows$mic_id, rows$raw_toa, decreasing = TRUE), , drop = FALSE]
   }
-  origin_time <- min(rows$raw_toa, na.rm = TRUE)
+  buffer_seconds <- suppressWarnings(as.numeric(buffer_seconds))
+  if (length(buffer_seconds) != 1 || !is.finite(buffer_seconds) || buffer_seconds < 0) {
+    buffer_seconds <- 0
+  }
   pieces <- lapply(seq_len(nrow(rows)), function(i) {
     row <- rows[i, , drop = FALSE]
     wav_path <- resolve_detection_wav_path(row, wav_root)
     if (is.na(wav_path) || !file.exists(wav_path)) {
       stop(paste("WAV file not found:", wav_path))
     }
-    segment <- read_wav_pcm_segment(wav_path, row$start_frame[[1]], row$end_frame[[1]])
+    row_sample_rate <- suppressWarnings(as.numeric(row$sample_rate[[1]]))
+    if (!is.finite(row_sample_rate) || row_sample_rate <= 0) {
+      stop(paste("Invalid sample rate for detection:", row$rec_id[[1]]))
+    }
+    original_start_frame <- as.numeric(row$start_frame[[1]])
+    buffered_start_frame <- max(0, floor(original_start_frame - buffer_seconds * row_sample_rate))
+    buffered_end_frame <- ceiling(as.numeric(row$end_frame[[1]]) + buffer_seconds * row_sample_rate)
+    segment <- read_wav_pcm_segment(wav_path, buffered_start_frame, buffered_end_frame)
     spectro <- compute_spectrogram_matrix(
       segment$samples,
       segment$sample_rate,
@@ -272,11 +296,19 @@ prepare_comparison_spectrograms <- function(rows, wav_root, window_size = 1024, 
       freq_min_hz = freq_min_hz,
       freq_max_hz = freq_max_hz
     )
-    spectro$x_seconds <- spectro$x_seconds + as.numeric(difftime(row$raw_toa[[1]], origin_time, units = "secs"))
+    spectro$segment_start_time <- row$raw_toa[[1]] -
+      (original_start_frame - buffered_start_frame) / segment$sample_rate
     spectro$rec_id <- row$rec_id[[1]]
     spectro$mic_id <- row$mic_id[[1]]
     spectro$raw_toa <- row$raw_toa[[1]]
     spectro
+  })
+
+  origin_time <- min(vapply(pieces, function(piece) as.numeric(piece$segment_start_time), numeric(1)))
+  origin_time <- as.POSIXct(origin_time, origin = "1970-01-01", tz = "UTC")
+  pieces <- lapply(pieces, function(piece) {
+    piece$x_seconds <- piece$x_seconds + as.numeric(difftime(piece$segment_start_time, origin_time, units = "secs"))
+    piece
   })
 
   z_values <- unlist(lapply(pieces, function(piece) as.vector(piece$z)), use.names = FALSE)

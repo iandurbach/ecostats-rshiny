@@ -346,13 +346,53 @@ mod_detection_timeline_ui <- function(id) {
               div(class = "sidebar-label", "Inputs"),
               shinyFilesButton(ns("databases"), "Select SQLite database(s)", "Select SQLite database files", multiple = TRUE),
               shinyFiles::shinyDirButton(ns("wav_root"), "Select WAV root folder", "Select WAV root folder"),
+              shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE),
               actionButton(ns("load_data"), "Load data"),
               div(class = "sidebar-status", textOutput(ns("input_status")))
             ),
             div(
               class = "sidebar-section",
+              div(class = "sidebar-label", "Spectrogram settings"),
+              shiny::selectInput(
+                ns("spectro_detail"),
+                "Detail",
+                choices = c(
+                  "Time detail" = "time",
+                  "Balanced" = "balanced",
+                  "Frequency detail" = "frequency"
+                ),
+                selected = "balanced"
+              ),
+              shiny::sliderInput(
+                ns("spectro_frequency_range"),
+                "Frequency range (Hz)",
+                min = 100,
+                max = 8000,
+                value = c(100, 8000),
+                step = 100,
+                sep = ""
+              ),
+              shiny::numericInput(
+                ns("spectro_buffer_seconds"),
+                "Buffer (seconds)",
+                value = 0,
+                min = 0,
+                step = 0.1
+              ),
+              shiny::selectInput(
+                ns("spectro_image_quality"),
+                "Image quality",
+                choices = c(
+                  "Standard" = "standard",
+                  "High" = "high",
+                  "Very high" = "very_high"
+                ),
+                selected = "standard"
+              )
+            ),
+            div(
+              class = "sidebar-section",
               div(class = "sidebar-label", "Export"),
-              shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE),
               downloadButton(ns("export_groups"), "Export RData"),
               downloadButton(ns("export_acre_inputs"), "Export acre inputs"),
               downloadButton(ns("export_acre_script"), "Export acre script"),
@@ -1350,13 +1390,30 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       }
 
       img_path <- tryCatch(
-        write_current_comparison_spectrogram_png(
-          rows,
-          selected_wav_root(),
-          spectro_cache_dir(),
-          width = 900,
-          row_height = 230
-        ),
+        {
+          frequency_range <- input$spectro_frequency_range
+          if (is.null(frequency_range) || length(frequency_range) != 2) {
+            frequency_range <- c(100, 8000)
+          }
+          image_scale <- spectrogram_image_scale(input$spectro_image_quality)
+          comparison <- prepare_comparison_spectrograms(
+            rows,
+            selected_wav_root(),
+            window_size = spectrogram_window_size(input$spectro_detail),
+            overlap = 0.75,
+            freq_min_hz = frequency_range[[1]],
+            freq_max_hz = frequency_range[[2]],
+            buffer_seconds = input$spectro_buffer_seconds
+          )
+          out_path <- file.path(spectro_cache_dir(), "current_comparison.png")
+          write_comparison_spectrogram_png(
+            comparison,
+            out_path,
+            width = 900 * image_scale,
+            row_height = 230 * image_scale
+          )
+          out_path
+        },
         error = function(e) e
       )
       if (inherits(img_path, "error")) {

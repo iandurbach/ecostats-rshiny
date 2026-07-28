@@ -227,6 +227,18 @@ test_that("comparison spectrogram renderer writes a combined PNG", {
   expect_gt(file.info(out_path)$size, 0)
 })
 
+test_that("spectrogram setting values map to analysis and image dimensions", {
+  expect_equal(spectrogram_window_size("time"), 512L)
+  expect_equal(spectrogram_window_size("balanced"), 1024L)
+  expect_equal(spectrogram_window_size("frequency"), 2048L)
+  expect_equal(spectrogram_window_size("unexpected"), 1024L)
+
+  expect_equal(spectrogram_image_scale("standard"), 1L)
+  expect_equal(spectrogram_image_scale("high"), 2L)
+  expect_equal(spectrogram_image_scale("very_high"), 3L)
+  expect_equal(spectrogram_image_scale("unexpected"), 1L)
+})
+
 test_that("comparison spectrogram renderer can overwrite one current PNG", {
   make_comparison <- function(value) {
     list(
