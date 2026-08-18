@@ -332,38 +332,13 @@ solve_set_packing_lpsolve <- function(candidates, detections) {
   which(result$solution > 0.5)
 }
 
-solve_set_packing_ompr <- function(candidates, detections) {
-  required <- c("ompr", "ompr.roi", "ROI", "ROI.plugin.glpk")
-  if (!all(vapply(required, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1)))) {
-    stop("ompr solver stack is not installed.", call. = FALSE)
-  }
-  members <- candidate_members(candidates)
-  detection_ids <- as.character(detections$rec_id)
-  model <- ompr::MIPModel() |>
-    ompr::add_variable(x[j], j = seq_len(nrow(candidates)), type = "binary") |>
-    ompr::set_objective(ompr::sum_expr(candidates$score[j] * x[j], j = seq_len(nrow(candidates))), "max")
-  for (rec_id in detection_ids) {
-    containing <- which(vapply(members, function(ids) rec_id %in% ids, logical(1)))
-    if (length(containing) > 0) {
-      model <- model |> ompr::add_constraint(ompr::sum_expr(x[j], j = containing) <= 1)
-    }
-  }
-  result <- ompr.roi::solve_model(model, ompr.roi::with_ROI(solver = "glpk"))
-  solution <- ompr::get_solution(result, x[j])
-  solution$j[solution$value > 0.5]
-}
-
-solve_set_packing <- function(candidates, detections, solver = c("auto", "ompr", "lpsolve")) {
+solve_set_packing <- function(candidates, detections, solver = c("auto", "lpsolve")) {
   solver <- match.arg(solver)
   if (nrow(candidates) == 0) return(integer(0))
-  if (solver %in% c("auto", "ompr") &&
-      all(vapply(c("ompr", "ompr.roi", "ROI", "ROI.plugin.glpk"), requireNamespace, quietly = TRUE, FUN.VALUE = logical(1)))) {
-    return(solve_set_packing_ompr(candidates, detections))
-  }
   if (solver %in% c("auto", "lpsolve") && requireNamespace("lpSolve", quietly = TRUE)) {
     return(solve_set_packing_lpsolve(candidates, detections))
   }
-  stop("No supported ILP solver is installed. Install ompr/ROI.plugin.glpk or lpSolve.", call. = FALSE)
+  stop("The lpSolve package is required for automatic grouping.", call. = FALSE)
 }
 
 format_selected_groups <- function(selected_candidates, detections, notes_prefix = "auto") {

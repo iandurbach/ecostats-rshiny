@@ -1,0 +1,12 @@
+utils::globalVariables(c(
+  "GPSDatetime2",
+  "cluster_id",
+  "measured_bearing",
+  "measured_gender",
+  "mic_ID",
+  "mic_id",
+  "n_detections",
+  "recording_ID",
+  "session_id",
+  "toa"
+))

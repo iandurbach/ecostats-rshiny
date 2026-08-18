@@ -6,38 +6,24 @@
 #' @importFrom bslib bs_theme
 #' @noRd
 app_ui <- function(request) {
+  resource_dir <- system.file("www", package = "vocomatcher")
+  if (!nzchar(resource_dir)) {
+    stop("Installed app resources could not be found.")
+  }
+  shiny::addResourcePath("vocomatcher-www", resource_dir)
+
   tagList(
-    # Leave this function for adding external resources
-    golem_add_external_resources(),
-    # Your application UI logic
+    tags$head(
+      tags$title("vocomatcher"),
+      tags$link(
+        rel = "shortcut icon",
+        type = "image/x-icon",
+        href = "vocomatcher-www/favicon.ico"
+      )
+    ),
     fluidPage(
       theme = bs_theme(version = 5),
       mod_detection_timeline_ui("detection_timeline")
     )
-  )
-}
-
-#' Add external Resources to the Application
-#'
-#' This function is internally used to add external
-#' resources inside the Shiny application.
-#'
-#' @import shiny
-#' @importFrom golem add_resource_path activate_js favicon bundle_resources
-#' @noRd
-golem_add_external_resources <- function() {
-  add_resource_path(
-    "www",
-    app_sys("app/www")
-  )
-
-  tags$head(
-    favicon(),
-    bundle_resources(
-      path = app_sys("app/www"),
-      app_title = "vocomatcher"
-    )
-    # Add here other external resources
-    # for example, you can add shinyalert::useShinyalert()
   )
 }

@@ -1,32 +1,3 @@
-#' helpers
-#'
-#' @description A fct function
-#'
-#' @return The return value, if any, from executing the function.
-#'
-#' @noRd
-#' @importFrom attempt attempt
-#' @importFrom tools file_ext
-read_csv_vroom <- function(datapath, ...) {
-
-  if(tolower(tools::file_ext(datapath)) != "csv") {
-    stop("Invalid file. Please upload a .csv file!")
-  }
-  # Save arguments to list
-  args <- list(datapath, ...)
-  # If only datapath argument
-  if (length(args) == 1) {
-    # Append default arguments
-#    args <- list(datapath, delim = ",", col_names = TRUE, na = c("NA", "NULL", ""))
-    args <- list(datapath, tryLogical = F, stringsAsFactors = F)
-  }
-  # Attempt to call vroom with arguments.
-#  return(attempt(do.call(vroom, args)))
-  return(attempt(do.call(read.csv, args)))
-
-}
-
-
 #' Remaining/Unmatched calls calculation Function
 #'
 #' @description
@@ -130,8 +101,7 @@ make_internal_rec_ids <- function(recording_ids) {
 #' @returns standardised recordings data with parsed time of arrival as datetime object.
 #' @noRd
 #'
-#' @importFrom dplyr mutate group_by summarise n rename select arrange
-#' @importFrom lubridate date stamp
+#' @importFrom dplyr mutate select arrange
 
 parse_rec_data <- function(recordings, extra_cols = NULL) {
   required_cols <- c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "spectrogram")
@@ -152,43 +122,35 @@ parse_rec_data <- function(recordings, extra_cols = NULL) {
   )
   selected_cols <- unique(c(required_cols, selected_extra, backend_cols))
 
-  recordings %>%
+  recordings |>
     # Keep required columns plus any extras the user opted in to show later
-    select(all_of(selected_cols)) %>%
+    dplyr::select(dplyr::all_of(selected_cols)) |>
     # standardise column names used internally while keeping the originals
-    mutate(
+    dplyr::mutate(
       rec_id = make_internal_rec_ids(recording_ID),
       mic_id = mic_ID,
       toa = parse_datetime_column(GPSDatetime2, tz = "UTC"),
       bearing = measured_bearing,
       sex = measured_gender,
       suspect_bearing = FALSE
-    ) %>%
+    ) |>
     # order by toa ascending
-    arrange(toa)
+    dplyr::arrange(toa)
 }
 
-#' Get backend row by frontend row id
-#'
-#' @description
-#' This function returns the row from recParsedData corresponding to the one in frontendData.
-#'
-#'
-#' @param frontendData The tibble the client sees on the frontend
-#' @param backendData The tibble the server holds.
-#' @returns the backend rows with the same rec_ids as the frontend rows.
-#' @importFrom dplyr slice pull filter
+#' Encode an image as a browser-ready data URI.
+#' @importFrom base64enc base64encode
+#' @importFrom tools file_ext
 #' @noRd
-get_backend_rows_by_frontend_id <- function(frontendData, backendData, frontendRowIDs) {
-  rec_ids <- frontendData %>%
-    slice(frontendRowIDs) %>%
-    pull(rec_id)
-
-  out <- backendData %>%
-    filter(rec_id %in% rec_ids)
-  return(out)
-}
-
-show_alert <- function(msg, title) {
-  golem::invoke_js("erroralert", list(title=title, msg=msg))
+encode_image <- function(img_path) {
+  ext <- tolower(tools::file_ext(img_path))
+  mime <- switch(
+    ext,
+    jpg = "image/jpeg",
+    jpeg = "image/jpeg",
+    png = "image/png",
+    gif = "image/gif",
+    "image/png"
+  )
+  paste0("data:", mime, ";base64,", base64enc::base64encode(img_path))
 }

@@ -18,7 +18,7 @@ test_that("detection timeline module UI exposes the new workflow controls", {
   ui <- mod_detection_timeline_ui(id = "test")
   html <- paste(as.character(ui), collapse = "\n")
 
-  golem::expect_shinytaglist(ui)
+  expect_s3_class(ui, "shiny.tag.list")
   expect_match(html, "Select SQLite database\\(s\\)")
   expect_match(html, "Select WAV root folder")
   expect_match(html, "Load existing groups")

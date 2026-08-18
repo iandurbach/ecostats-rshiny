@@ -315,7 +315,7 @@ write_spectrogram_png <- function(
     x = plot_times,
     y = freqs[keep] / 1000,
     z = t(spec[keep, , drop = FALSE]),
-    col = hcl.colors(128, "Inferno"),
+    col = grDevices::hcl.colors(128, "Inferno"),
     xlab = "Time",
     ylab = "Frequency (kHz)",
     main = title,

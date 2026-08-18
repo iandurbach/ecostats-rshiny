@@ -1,26 +1,3 @@
-find_file_upwards <- function(filename, start = getwd()) {
-  current <- normalizePath(start, mustWork = TRUE)
-  repeat {
-    candidate <- file.path(current, filename)
-    if (file.exists(candidate)) return(candidate)
-    parent <- dirname(current)
-    if (identical(parent, current)) return(NA_character_)
-    current <- parent
-  }
-}
-
-clusterer_script <- find_file_upwards(file.path("ecostats-rshiny", "group_gibbon_detections.R"))
-if (is.na(clusterer_script)) {
-  clusterer_script <- find_file_upwards("group_gibbon_detections.R")
-}
-if (!is.na(clusterer_script)) {
-  source(clusterer_script)
-}
-
-skip_if_no_clusterer_script <- function() {
-  skip_if(is.na(clusterer_script), "Standalone clusterer script is outside the package test copy.")
-}
-
 make_clusterer_recordings <- function() {
   data.frame(
     recording_ID = c("a1", "b1", "a2", "c1", "b2", "c2"),
@@ -42,7 +19,6 @@ make_clusterer_recordings <- function() {
 }
 
 test_that("candidate generation excludes singletons and duplicate-recorder groups", {
-  skip_if_no_clusterer_script()
   prepared <- prepare_grouping_inputs(make_clusterer_recordings())
   candidates <- generate_candidate_groups(prepared$detections, max_group_span_seconds = 4)
 
@@ -56,7 +32,6 @@ test_that("candidate generation excludes singletons and duplicate-recorder group
 })
 
 test_that("set packing assigns each selected detection at most once", {
-  skip_if_no_clusterer_script()
   result <- group_gibbon_detections(make_clusterer_recordings(), max_group_span_seconds = 4, solver = "lpsolve")
 
   expect_gt(nrow(result$group_membership), 0)
@@ -69,7 +44,6 @@ test_that("set packing assigns each selected detection at most once", {
 })
 
 test_that("saved clusterer output matches app grouping RData format", {
-  skip_if_no_clusterer_script()
   recordings <- make_clusterer_recordings()
   result <- group_gibbon_detections(recordings, max_group_span_seconds = 4, solver = "lpsolve")
   out_path <- tempfile(fileext = ".RData")
@@ -97,7 +71,6 @@ test_that("saved clusterer output matches app grouping RData format", {
 })
 
 test_that("session proposals preserve existing groups and removed detections", {
-  skip_if_no_clusterer_script()
   prepared <- prepare_grouping_inputs(make_clusterer_recordings())
   existing <- format_group_membership_rows(
     prepared$detections[1, , drop = FALSE],
@@ -123,7 +96,6 @@ test_that("session proposals preserve existing groups and removed detections", {
 })
 
 test_that("session proposals are chronological and can be remapped to app ids", {
-  skip_if_no_clusterer_script()
   prepared <- prepare_grouping_inputs(make_clusterer_recordings())
   proposals <- propose_session_groups(
     prepared$detections,
@@ -145,7 +117,6 @@ test_that("session proposals are chronological and can be remapped to app ids", 
 })
 
 test_that("ungrouped detections remain available", {
-  skip_if_no_clusterer_script()
   result <- group_gibbon_detections(make_clusterer_recordings(), max_group_span_seconds = 4, solver = "lpsolve")
 
   expect_true("c2" %in% result$ungrouped_detections$rec_id)
@@ -153,7 +124,6 @@ test_that("ungrouped detections remain available", {
 })
 
 test_that("bearing support is weak evidence and not a hard filter", {
-  skip_if_no_clusterer_script()
   recordings <- make_clusterer_recordings()[1:2, , drop = FALSE]
   mics <- data.frame(
     mic_id = c("A", "B"),
@@ -176,7 +146,6 @@ test_that("bearing support is weak evidence and not a hard filter", {
 })
 
 test_that("temporal scoring responds to every candidate member", {
-  skip_if_no_clusterer_script()
   base_time <- as.POSIXct("2026-01-01 00:00:00", tz = "UTC")
   compact <- data.frame(
     rec_id = paste0("compact", 1:5),
@@ -195,7 +164,6 @@ test_that("temporal scoring responds to every candidate member", {
 })
 
 test_that("large incoherent candidates are filtered instead of rewarded by size", {
-  skip_if_no_clusterer_script()
   base_time <- as.POSIXct("2026-01-01 00:00:00", tz = "UTC")
   detections <- data.frame(
     rec_id = paste0("d", 1:5),
@@ -209,7 +177,6 @@ test_that("large incoherent candidates are filtered instead of rewarded by size"
 })
 
 test_that("invalid scoring scales fail clearly", {
-  skip_if_no_clusterer_script()
   prepared <- prepare_grouping_inputs(make_clusterer_recordings()[1:2, ])
 
   expect_error(
@@ -223,7 +190,6 @@ test_that("invalid scoring scales fail clearly", {
 })
 
 test_that("bearing score uses a fitted common source and reports its residual", {
-  skip_if_no_clusterer_script()
   rows <- data.frame(
     rec_id = c("a", "b", "c"),
     mic_id = c("A", "B", "C"),
@@ -243,7 +209,6 @@ test_that("bearing score uses a fitted common source and reports its residual", 
 })
 
 test_that("sample SQLite subset can be grouped", {
-  skip_if_no_clusterer_script()
   db_paths <- test_path("..", "..", "..", "data", "db", "NCNX06a_database.sqlite3")
   skip_if_not(file.exists(db_paths))
 

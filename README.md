@@ -7,8 +7,6 @@
 
 [![Lifecycle:
 experimental](https://img.shields.io/badge/lifecycle-experimental-orange.svg)](https://lifecycle.r-lib.org/articles/stages.html#experimental)
-[![Codecov test
-coverage](https://codecov.io/gh/jaytohe/ecostats-rshiny/branch/main/graph/badge.svg)](https://app.codecov.io/gh/jaytohe/ecostats-rshiny?branch=main)
 <!-- badges: end -->
 
 The goal of vocomatcher is to assist with matching and deduplicating
@@ -76,16 +74,5 @@ pkgload::load_all(".")
 vocomatcher::run_app()
 ```
 
-The files under `dev/` are package-maintenance scripts, not installation
-steps. In particular, do not run `dev/01_start.R` or `dev/02_dev.R`
-merely to install or launch the app; they modify package scaffolding and
-metadata.
-
-## Development
-
-After making changes to the app:
-
-```r
-pkgload::load_all(".")
-vocomatcher::run_app()
-```
+After making source changes, run `pkgload::load_all(".")` again before
+relaunching the app.
