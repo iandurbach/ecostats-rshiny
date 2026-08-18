@@ -25,47 +25,55 @@ The goal of vocomatcher is to assist with matching and deduplicating animal call
 This repo originally forked from https://github.com/jaytohe/ecostats-rshiny.git.
 
 ## R Version
-The app has only been tested on R version 4.4.1 (2024-06-14).
+The app has only been tested on R version 4.4.3 (2025-02-28).
 
 
 ## Installation
 
-You can install the development version of vocomatcher from [GitHub](https://github.com/) with:
+### Ordinary users
+
+Install Vocomatcher from [this GitHub repository](https://github.com/iandurbach/ecostats-rshiny). Run the following commands once in R:
 
 ``` r
-# install.packages("devtools")
-devtools::install_github("iandurbach/ecostats-rshiny")
+install.packages("remotes")
+remotes::install_github(
+  "iandurbach/ecostats-rshiny",
+  dependencies = TRUE,
+  upgrade = "never",
+  build_vignettes = TRUE
+)
 ```
 
-If you want to try vocomatcher with the example data provided under `data/poc_spectro`, there are two options:
+Then launch the app whenever you want to use it:
 
-## Option 1
-1. `git clone https://github.com/iandurbach/ecostats-rshiny.git`
-2. Open up RStudio in the directory of the cloned repository
-3. Install the `golem` package
-4. Open `dev/01_start.R` and run it.
-5. Open `dev/02_start.R` and run it.
-6. Open `dev/run_dev.R` and run it.
-7. This should launch the Shiny app on your browser.
-8. From Vocomatcher, in the Import CSVs screen, you can then navigate to the directory of the cloned repo and find the example data under `data/poc_spectro`.
-9. In said directory, `mic.csv` is the microphone location coordinates csv file, `recordings.csv` is the recorded calls csv.
-
-## Option 2
-
-1. Open up an R terminal and type:
 ``` r
-# install.packages("devtools")
-devtools::install_github("iandurbach/ecostats-rshiny")
+vocomatcher::run_app()
 ```
-This should install all the dependencies of vocomatcher and vocomatcher itself.
 
-2. Clone the repo (from a regular shell):
+Open the installed user guide with:
 
-`git clone https://github.com/iandurbach/ecostats-rshiny.git`
+``` r
+vignette("vocomatcher", package = "vocomatcher")
+```
 
-3. Back on the R terminal, run the Shiny app using:
-`vocomatcher::run_app()`
+The app opens in your web browser. Keep the R process running while using it. `build_vignettes = TRUE` installs the full illustrated user guide. `upgrade = "never"` prevents installation from unexpectedly upgrading unrelated packages; if R reports that an installed dependency is too old, update that package or repeat the installation with `upgrade = "ask"`.
 
-4. Follow steps 8, 9 from Option 1.
+### Developers
 
-_Note: The example data is not real._
+Clone the repository from a terminal:
+
+``` bash
+git clone https://github.com/iandurbach/ecostats-rshiny.git
+cd ecostats-rshiny
+```
+
+Open R in the cloned repository, install the development tools once, then load the source and launch the app:
+
+``` r
+install.packages(c("pkgload", "devtools"))
+
+pkgload::load_all(".")
+vocomatcher::run_app()
+```
+
+The files under `dev/` are package-maintenance scripts, not installation steps. In particular, do not run `dev/01_start.R` or `dev/02_dev.R` merely to install or launch the app; they modify package scaffolding and metadata.
