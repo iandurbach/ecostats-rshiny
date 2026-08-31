@@ -19,7 +19,7 @@ test_that("database ingestion returns app-compatible mic and recording data", {
   expect_named(out, c("micData", "recData"))
   expect_true(all(c("mic_id", "lng", "lat") %in% names(out$micData)))
   expect_true(all(c("recording_ID", "mic_ID", "GPSDatetime2", "measured_bearing", "measured_gender", "spectrogram") %in% names(out$recData)))
-  expect_true(all(c("wav_file", "start_frame", "end_frame", "clock_offset") %in% names(out$recData)))
+  expect_true(all(c("wav_file", "start_frame", "end_frame", "clock_offset", "call_type") %in% names(out$recData)))
   expect_equal(out$micData$mic_id[[1]], "NCNX06a")
   expect_true(nrow(out$recData) > 0)
   expect_true(all(out$recData$measured_bearing >= 0 & out$recData$measured_bearing < 360))
@@ -45,6 +45,20 @@ test_that("parse_rec_data preserves database backend metadata", {
   expect_true(all(c("wav_file", "start_frame", "end_frame", "clock_offset") %in% names(parsed)))
   expect_equal(parsed$rec_id[[1]], "NCNX06a_1")
   expect_equal(parsed$mic_id[[1]], "NCNX06a")
+})
+
+test_that("database call types are read as distinct sorted choices", {
+  candidates <- c(
+    file.path(getwd(), "..", "data", "db", "NCNX06a_database.sqlite3"),
+    file.path(getwd(), "..", "..", "data", "db", "NCNX06a_database.sqlite3"),
+    test_path("..", "..", "..", "data", "db", "NCNX06a_database.sqlite3")
+  )
+  existing <- candidates[file.exists(candidates)]
+  skip_if(length(existing) == 0)
+
+  call_types <- read_database_call_types(existing[[1]])
+  expect_true("Female" %in% call_types)
+  expect_equal(call_types, sort(unique(call_types)))
 })
 
 test_that("parse_rec_data creates unique internal rec ids for repeated recording ids", {

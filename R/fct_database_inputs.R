@@ -29,6 +29,26 @@ resolve_detection_table <- function(conn) {
   stop("Database is missing detection table Gibbon_A/GibbonA.")
 }
 
+read_database_call_types <- function(db_paths) {
+  call_types <- unlist(lapply(db_paths, function(db_path) {
+    conn <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+    on.exit(DBI::dbDisconnect(conn), add = TRUE)
+
+    detection_table <- resolve_detection_table(conn)
+    fields <- DBI::dbListFields(conn, detection_table)
+    if (!"Call_Type" %in% fields) {
+      stop(paste(basename(db_path), "is missing Gibbon_A.Call_Type."))
+    }
+    DBI::dbGetQuery(
+      conn,
+      paste0("SELECT DISTINCT Call_Type FROM ", DBI::dbQuoteIdentifier(conn, detection_table))
+    )$Call_Type
+  }), use.names = FALSE)
+
+  call_types <- trimws(as.character(call_types))
+  sort(unique(call_types[!is.na(call_types) & nzchar(call_types)]))
+}
+
 parse_db_utc <- function(x) {
   as.POSIXct(x, tz = "UTC", format = "%Y-%m-%d %H:%M:%OS")
 }
@@ -147,7 +167,7 @@ read_single_detection_database <- function(db_path, offset_sign = 1) {
   offsets <- read_database_table(conn, "Trex_Time_Offset")
   sound_acquisition <- read_database_table(conn, "Sound_Acquisition")
 
-  required_detection <- c("Id", "UTC", "Duration", "BearingAngle1")
+  required_detection <- c("Id", "UTC", "Duration", "BearingAngle1", "Call_Type")
   missing_detection <- setdiff(required_detection, names(detections))
   if (length(missing_detection) > 0) {
     stop(paste("Detection table is missing column(s):", paste(missing_detection, collapse = ", ")))
@@ -178,6 +198,7 @@ read_single_detection_database <- function(db_path, offset_sign = 1) {
     GPSDatetime2 = format(standardized_toa, "%Y-%m-%d %H:%M:%OS3", tz = "UTC"),
     measured_bearing = normalize_bearing_degrees(recorder_heading + detections$BearingAngle1 * 180 / pi),
     measured_gender = NA_character_,
+    call_type = trimws(as.character(detections$Call_Type)),
     spectrogram = paste0(mic_id, "_", detections$Id, ".png"),
     database_path = normalizePath(db_path, mustWork = FALSE),
     detection_table = detection_table,

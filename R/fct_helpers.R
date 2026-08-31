@@ -116,7 +116,7 @@ parse_rec_data <- function(recordings, extra_cols = NULL) {
       "database_path", "detection_table", "detection_id", "cluster_id", "raw_toa",
       "clock_offset", "Duration", "relative_bearing_rad", "vertical_bearing_rad",
       "recorder_heading", "wav_file", "recording_start_utc", "recording_stop_utc",
-      "samples", "sample_rate", "start_frame", "end_frame"
+      "samples", "sample_rate", "start_frame", "end_frame", "call_type"
     ),
     names(recordings)
   )

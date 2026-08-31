@@ -22,6 +22,8 @@ test_that("detection timeline module UI exposes the new workflow controls", {
   expect_match(html, "Select SQLite database\\(s\\)")
   expect_match(html, "Select WAV root folder")
   expect_match(html, "Load existing groups")
+  expect_match(html, "Call type")
+  expect_match(html, 'id="test-call_type_filter"')
   expect_match(html, "Export RData")
   expect_match(html, "Export acre inputs")
   expect_match(html, "Export acre script")

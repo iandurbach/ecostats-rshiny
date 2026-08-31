@@ -14,8 +14,6 @@ knitr::opts_chunk$set(
 )
 ```
 
-# Vocomatcher user guide
-
 ## What this app does
 
 Vocomatcher helps you decide which detections from several autonomous recorders are the **same gibbon call**. It places detections on a common UTC timeline, shows the recorder positions and measured bearings on a map, and draws time-aligned spectrograms for selected detections. You can create and revise groups by hand or ask the app to propose groups automatically.
@@ -33,7 +31,9 @@ This guide describes the prototype represented by the code in this repository in
 
 ## The screen at a glance
 
-![Annotated overview of the loaded app](images/app-overview-annotated.png)
+```{r overview-screenshot, echo=FALSE, out.width='80%', fig.align='center', fig.cap='Annotated overview of the loaded app.'}
+knitr::include_graphics("images/app-overview-annotated.png")
+```
 
 1. **Sidebar:** choose the input files, change spectrogram settings, and export results.
 2. **Navigation and session summary:** move between recorder clusters and recording sessions. The summary reports the cluster, session number, UTC interval, and detection count.
@@ -99,27 +99,30 @@ WAV root/
 
 For example, `NCNX06a_database.sqlite3` is interpreted as recorder `NCNX06a`. Recorder IDs that share the same numeric part are treated as one recorder **cluster**: `NCNX06a` through `NCNX06e` form cluster `NCNX06`.
 
-The app currently expects PCM WAV files with 16-, 24-, or 32-bit samples. A database must contain the detection table `Gibbon_A` or `GibbonA`, plus `Trex_Location`, `Trex_Orientation`, `Trex_Time_Offset`, and `Sound_Acquisition`.
+The app currently expects PCM WAV files with 16-, 24-, or 32-bit samples. A database must contain the detection table `Gibbon_A` or `GibbonA`, including its `Call_Type` column, plus `Trex_Location`, `Trex_Orientation`, `Trex_Time_Offset`, and `Sound_Acquisition`.
 
 ## Quick start: the shortest successful workflow
 
 1. Launch the app.
 2. Click **Select SQLite database(s)**.
 3. Navigate to the folder containing your databases, select every recorder database to be analysed together, and confirm the selection.
-4. Click **Select WAV root folder** and choose the folder immediately above the recorder-specific WAV folders.
-5. Click **Load data**.
-6. Use **Previous/Next cluster** and **Previous/Next session** to reach the data you want to inspect.
-7. Select likely matching detections on the timeline.
-8. Compare their aligned spectrograms and bearing arrows.
-9. Click **Group**, or use **Auto group** and review the proposal.
-10. Repeat until the session has been reviewed.
-11. Click **Export RData** to save work that can be reloaded later.
+4. Optionally choose one value, such as **Female**, from **Call type** to restrict the displayed detections.
+5. Click **Select WAV root folder** and choose the folder immediately above the recorder-specific WAV folders.
+6. Click **Load data**.
+7. Use **Previous/Next cluster** and **Previous/Next session** to reach the data you want to inspect.
+8. Select likely matching detections on the timeline.
+9. Compare their aligned spectrograms and bearing arrows.
+10. Click **Group**, or use **Auto group** and review the proposal.
+11. Repeat until the session has been reviewed.
+12. Click **Export RData** to save work that can be reloaded later.
 
 ## Step 1: load detection and audio data
 
 The app initially looks like this:
 
-![The app before data are loaded](images/app-empty.png)
+```{r empty-app-screenshot, echo=FALSE, out.width='75%', fig.align='center', fig.cap='The app before data are loaded.'}
+knitr::include_graphics("images/app-empty.png")
+```
 
 ### Select databases
 
@@ -133,6 +136,12 @@ The small status line beneath **Load data** updates to show the number of select
 
 Choose all recorders that should appear together. Loading only some recorders is allowed, but calls detected only by omitted recorders cannot be considered during grouping.
 
+### Filter by call type
+
+After the databases are selected, the **Call type** menu is populated with the distinct values found in `Gibbon_A.Call_Type` across those databases. Choose a single value, such as **Female**, to show only detections with that exact call type. Choose **All call types** to remove the filter.
+
+The filter can be changed before or after clicking **Load data**. It updates the timeline and the detection count in the session summary. Manual selection and automatic grouping then operate on the displayed subset. The filter changes the current view and grouping candidates; it does not delete detections from the loaded data.
+
 ### Select the WAV root
 
 Click **Select WAV root folder**, choose the common parent folder, and confirm it. Do not choose an individual recorder folder such as `NCNX06a`; choose its parent.
@@ -145,7 +154,9 @@ Click **Load data**. Wait for the confirmation notification. A successful load p
 
 For the supplied example set, the run used for this guide loaded five databases and **662 detections**. It opened cluster `NCNX06`, session 2 of 15, containing 123 detections:
 
-![Vocomatcher with the supplied database and WAV data loaded](images/app-loaded.png)
+```{r loaded-app-screenshot, echo=FALSE, out.width='75%', fig.align='center', fig.cap='Vocomatcher with the supplied database and WAV data loaded.'}
+knitr::include_graphics("images/app-loaded.png")
+```
 
 Loading a new dataset clears the current in-memory grouping, removal, selection, suspect-bearing, and zoom state. Export work before replacing the data.
 
@@ -156,6 +167,7 @@ Check these common causes:
 - **“Select at least one SQLite detection database”**: no database selection was confirmed.
 - **“Select a valid WAV root folder”**: no folder was selected, or it no longer exists.
 - **Missing database table/column**: the database does not have the expected detector schema.
+- **Missing `Gibbon_A.Call_Type`**: the call-type menu cannot be populated and the database cannot be loaded.
 - **No recording sessions found**: `Sound_Acquisition` does not contain usable Start/Stop pairs.
 - **No detector clusters found**: the database filenames do not contain a numeric cluster identifier.
 - **WAV file not found** when selecting a point: the chosen root, recorder subfolder, or WAV filename does not match the database.
@@ -528,6 +540,7 @@ Grouping state lives in the current Shiny session until exported. Refreshing, cl
 | Select WAV root folder | Choose common audio parent folder | Next/current load |
 | Load existing groups | Import `groups` and optional `removed_points` | Loaded dataset |
 | Load data | Parse databases, sessions, locations, offsets, and recordings | Whole workspace |
+| Call type | Show one `Gibbon_A.Call_Type` level, or all levels | Timeline and grouping candidates |
 | Detail | Change spectrogram time/frequency resolution | Spectrogram rendering |
 | Frequency range | Limit plotted frequencies | Spectrogram rendering |
 | Buffer | Add audio before and after each detection | Spectrogram rendering |

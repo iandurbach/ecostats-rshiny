@@ -348,6 +348,12 @@ mod_detection_timeline_ui <- function(id) {
               shinyFiles::shinyDirButton(ns("wav_root"), "Select WAV root folder", "Select WAV root folder"),
               shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE),
               actionButton(ns("load_data"), "Load data"),
+              shiny::selectInput(
+                ns("call_type_filter"),
+                "Call type",
+                choices = c("All call types" = ""),
+                selected = ""
+              ),
               div(class = "sidebar-status", textOutput(ns("input_status")))
             ),
             div(
@@ -522,7 +528,24 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     observeEvent(input$databases, {
       req(!is.integer(input$databases))
       f <- shinyFiles::parseFilePaths(volumes, input$databases)
-      selected_db_paths(normalizePath(f$datapath, mustWork = FALSE))
+      db_paths <- normalizePath(f$datapath, mustWork = FALSE)
+      selected_db_paths(db_paths)
+
+      call_types <- tryCatch(read_database_call_types(db_paths), error = function(e) e)
+      if (inherits(call_types, "error")) {
+        shiny::updateSelectInput(session, "call_type_filter", choices = c("All call types" = ""), selected = "")
+        showNotification(conditionMessage(call_types), type = "warning", duration = 10)
+      } else {
+        choices <- stats::setNames(call_types, call_types)
+        selected_call_type <- isolate(input$call_type_filter) %||% ""
+        if (!selected_call_type %in% c("", call_types)) selected_call_type <- ""
+        shiny::updateSelectInput(
+          session,
+          "call_type_filter",
+          choices = c("All call types" = "", choices),
+          selected = selected_call_type
+        )
+      }
     })
 
     observeEvent(input$wav_root, {
@@ -810,11 +833,17 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     session_data <- reactive({
       timeline <- timeline_data()
       req(timeline)
-      timeline |>
+      filtered <- timeline |>
         dplyr::filter(
           cluster_id == current_cluster_id(),
           session_id == current_session()$session_id[[1]]
-        ) |>
+        )
+      selected_call_type <- input$call_type_filter %||% ""
+      if (nzchar(selected_call_type)) {
+        filtered <- filtered |>
+          dplyr::filter(call_type == selected_call_type)
+      }
+      filtered |>
         dplyr::mutate(recorder_lane = match(mic_id, recorder_levels())) |>
         dplyr::arrange(toa, mic_id)
     })
@@ -845,7 +874,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
         ": ",
         session_title(row),
         " | ",
-        row$n_detections[[1]],
+        nrow(session_data()),
         " detections"
       )
     })
