@@ -372,3 +372,40 @@ ensure_spectrogram_png <- function(row, wav_root, cache_dir) {
   )
   out_path
 }
+
+# Verified WGS84 coordinates are a complete replacement, never a partial join.
+read_verified_recorder_locations <- function(path) {
+  locations <- utils::read.csv(path, colClasses = "character", check.names = FALSE,
+                               stringsAsFactors = FALSE)
+  required <- c("recorder_ID", "longitude", "latitude")
+  if (any(vapply(required, function(name) sum(names(locations) == name) != 1L, logical(1)))) {
+    stop("CSV must contain exactly one of each column: recorder_ID, longitude, latitude.")
+  }
+  if (!nrow(locations)) stop("Recorder-location CSV contains no data rows.")
+  locations <- locations[, required, drop = FALSE]
+  locations$recorder_ID <- trimws(locations$recorder_ID)
+  bad_ids <- which(is.na(locations$recorder_ID) | !nzchar(locations$recorder_ID))
+  if (length(bad_ids)) stop("Empty recorder IDs in CSV data row(s): ", paste(bad_ids, collapse = ", "))
+  duplicates <- unique(locations$recorder_ID[duplicated(locations$recorder_ID)])
+  if (length(duplicates)) stop("Duplicate recorder IDs: ", paste(duplicates, collapse = ", "))
+  for (column in c("longitude", "latitude")) {
+    values <- suppressWarnings(as.numeric(locations[[column]]))
+    limit <- if (column == "longitude") 180 else 90
+    bad <- which(!is.finite(values) | abs(values) > limit)
+    if (length(bad)) stop("Invalid ", column, " for recorder(s): ",
+                          paste(locations$recorder_ID[bad], collapse = ", "),
+                          ". Use finite WGS84 decimal degrees within +/-", limit, ".")
+    locations[[column]] <- values
+  }
+  locations
+}
+
+apply_verified_recorder_locations <- function(mic_data, locations) {
+  index <- match(mic_data$mic_id, locations$recorder_ID)
+  missing_ids <- unique(as.character(mic_data$mic_id[is.na(index)]))
+  if (length(missing_ids)) stop("Recorder-location CSV is missing loaded recorder(s): ",
+                               paste(missing_ids, collapse = ", "))
+  mic_data$lng <- locations$longitude[index]
+  mic_data$lat <- locations$latitude[index]
+  mic_data
+}

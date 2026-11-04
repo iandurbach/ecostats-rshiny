@@ -38,7 +38,7 @@ test_that("set packing assigns each selected detection at most once", {
   expect_equal(anyDuplicated(result$group_membership$rec_id), 0L)
   expect_named(
     result$grouped_detections,
-    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
+    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing")
   )
   expect_true(all(result$grouped_detections$grouping_method == "automated"))
 })
@@ -57,11 +57,11 @@ test_that("saved clusterer output matches app grouping RData format", {
   expect_false(exists("result", envir = env, inherits = FALSE))
   expect_named(
     env$groups,
-    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
+    c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing")
   )
   expect_named(
     env$removed_points,
-    c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing")
+    c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing")
   )
 
   timeline <- prepare_grouping_inputs(recordings)$detections

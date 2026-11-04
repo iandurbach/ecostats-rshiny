@@ -52,6 +52,19 @@ mod_detection_timeline_ui <- function(id) {
         margin-bottom: 6px;
         text-align: left;
       }
+      .recorder-location-upload .shiny-input-container { width: 100%; }
+      .recorder-location-upload .input-group { display: block; }
+      .recorder-location-upload .input-group-btn { display: block; width: 100%; }
+      .recorder-location-upload .form-control { display: none; }
+      .optional-input .btn {
+        background-color: #d9edf7;
+        border-color: #9acfea;
+        color: #245269;
+      }
+      .optional-input .btn:hover, .optional-input .btn:focus {
+        background-color: #c4e3f3;
+        border-color: #6cb6d6;
+      }
       .sidebar-label {
         font-weight: 700;
         font-size: 13px;
@@ -346,8 +359,11 @@ mod_detection_timeline_ui <- function(id) {
               div(class = "sidebar-label", "Inputs"),
               shinyFilesButton(ns("databases"), "Select SQLite database(s)", "Select SQLite database files", multiple = TRUE),
               shinyFiles::shinyDirButton(ns("wav_root"), "Select WAV root folder", "Select WAV root folder"),
-              shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE),
               actionButton(ns("load_data"), "Load data"),
+              div(class = "optional-input",
+                  shinyFilesButton(ns("existing_groups"), "Load existing groups", "Select saved RData grouping file", multiple = FALSE)),
+              shiny::uiOutput(ns("recorder_locations_input")),
+              shiny::uiOutput(ns("recorder_locations_reset")),
               shiny::selectInput(
                 ns("call_type_filter"),
                 "Call type",
@@ -508,6 +524,55 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     selected_db_paths <- reactiveVal(character(0))
     selected_wav_root <- reactiveVal(NULL)
     mic_data <- reactiveVal(NULL)
+    database_mic_data <- reactiveVal(NULL)
+    location_upload <- reactiveVal(NULL)
+    location_source <- reactiveVal(list(type = "database", filename = NULL))
+    location_notice <- reactiveVal("")
+    location_input_version <- reactiveVal(0L)
+
+    output$recorder_locations_input <- renderUI({
+      location_input_version()
+      div(class = "recorder-location-upload optional-input",
+          shiny::fileInput(session$ns("recorder_locations"), label = NULL,
+                           buttonLabel = "Update recorder locations",
+                           accept = ".csv", multiple = FALSE))
+    })
+    output$recorder_locations_reset <- renderUI({
+      if (is.null(location_upload())) return(NULL)
+      shiny::actionLink(session$ns("reset_recorder_locations"), "Use database locations")
+    })
+    observeEvent(input$recorder_locations, {
+      upload <- input$recorder_locations
+      positions <- tryCatch(read_verified_recorder_locations(upload$datapath[[1]]), error = function(e) e)
+      candidate <- list(filename = upload$name[[1]], positions = positions)
+      location_upload(candidate)
+      updated <- tryCatch({
+        if (inherits(positions, "error")) stop(positions)
+        if (is.null(database_mic_data())) NULL else
+          apply_verified_recorder_locations(database_mic_data(), positions)
+      }, error = function(e) e)
+      if (inherits(updated, "error")) {
+        location_notice(paste0("CSV rejected: ", conditionMessage(updated), " Current locations retained."))
+        showNotification(location_notice(), type = "error", duration = 15)
+        return()
+      }
+      if (is.null(updated)) {
+        location_notice(paste0("CSV staged: ", candidate$filename, "; coverage checked on Load data."))
+      } else {
+        mic_data(updated)
+        location_source(list(type = "csv", filename = candidate$filename))
+        location_notice("")
+        showNotification("Recorder locations updated. Existing groups retained; review bearing-based matches.",
+                         type = "message", duration = 10)
+      }
+    })
+    observeEvent(input$reset_recorder_locations, {
+      location_upload(NULL)
+      location_notice("")
+      location_source(list(type = "database", filename = NULL))
+      if (!is.null(database_mic_data())) mic_data(database_mic_data())
+      location_input_version(location_input_version() + 1L)
+    })
     timeline_data <- reactiveVal(NULL)
     sessions_data <- reactiveVal(NULL)
     cluster_ids_data <- reactiveVal(character(0))
@@ -661,6 +726,14 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
 
       loaded <- tryCatch({
         db_data <- read_detection_databases(db_paths)
+        candidate <- location_upload()
+        effective_mics <- db_data$micData
+        source <- list(type = "database", filename = NULL)
+        if (!is.null(candidate)) {
+          if (inherits(candidate$positions, "error")) stop(candidate$positions)
+          effective_mics <- apply_verified_recorder_locations(effective_mics, candidate$positions)
+          source <- list(type = "csv", filename = candidate$filename)
+        }
         parsed_rec_data <- parse_rec_data(db_data$recData)
         recording_intervals <- read_recording_intervals_from_databases(db_paths)
         sessions <- build_recording_sessions(
@@ -682,7 +755,9 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
           stop("No detector clusters were found in the selected databases.")
         }
         list(
-          mic_data = db_data$micData,
+          mic_data = effective_mics,
+          database_mic_data = db_data$micData,
+          location_source = source,
           timeline = timeline,
           sessions = sessions,
           cluster_ids = cluster_ids
@@ -695,7 +770,10 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       }
 
       dir.create(spectro_cache_dir(), recursive = TRUE, showWarnings = FALSE)
+      database_mic_data(loaded$database_mic_data)
       mic_data(loaded$mic_data)
+      location_source(loaded$location_source)
+      location_notice("")
       timeline_data(loaded$timeline)
       sessions_data(loaded$sessions)
       cluster_ids_data(loaded$cluster_ids)
@@ -717,7 +795,10 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
         db_count,
         " database(s) selected",
         if (!is.null(wav_root)) paste0(" | WAV: ", wav_root) else " | WAV: not selected",
-        if (loaded) paste0(" | ", nrow(timeline_data()), " detections loaded") else ""
+        if (loaded) paste0(" | ", nrow(timeline_data()), " detections loaded") else "",
+        " | Locations: ", if (location_source()$type == "csv")
+          paste0("verified CSV: ", location_source()$filename) else "database locations",
+        if (nzchar(location_notice())) paste0(" | ", location_notice()) else ""
       )
     })
 
@@ -806,6 +887,9 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
     })
 
     timeline_event_data <- function(event) {
+      # No Plotly widget exists until data have been loaded. Registering listeners
+      # earlier schedules misleading "not registered" warnings on the next flush.
+      req(!is.null(timeline_data()))
       suppressWarnings(plotly::event_data(event, source = session$ns("timeline")))
     }
 
@@ -1384,7 +1468,7 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
       mics <- mic_data()
       sessions <- sessions_data()
       req(timeline, mics, sessions)
-      build_acre_export_bundle(
+      bundle <- build_acre_export_bundle(
         timeline_data = apply_suspect_bearing_state(timeline, suspect_bearing_state()),
         mic_data = mics,
         sessions = sessions,
@@ -1392,6 +1476,8 @@ mod_detection_timeline_server <- function(id, session_gap_minutes = 30) {
         removed_membership = removed_membership(),
         source_db_paths = selected_db_paths()
       )
+      bundle$metadata$location_source <- location_source()
+      bundle
     })
 
     output$export_acre_inputs <- downloadHandler(

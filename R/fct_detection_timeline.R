@@ -413,6 +413,8 @@ empty_grouped_detections <- function() {
     detection_end_time = as.POSIXct(character(0), tz = "UTC"),
     Notes = character(0),
     suspect_bearing = logical(0),
+    call_type = character(0),
+    bearing = numeric(0),
     stringsAsFactors = FALSE
   )
 }
@@ -425,6 +427,8 @@ empty_removed_detections <- function() {
     detection_end_time = as.POSIXct(character(0), tz = "UTC"),
     Notes = character(0),
     suspect_bearing = logical(0),
+    call_type = character(0),
+    bearing = numeric(0),
     stringsAsFactors = FALSE
   )
 }
@@ -478,6 +482,8 @@ format_detection_action_rows <- function(rows, notes = "", group_id = NULL, grou
     detection_end_time = rows$toa + suppressWarnings(as.numeric(rows$Duration)),
     Notes = rep(as.character(notes %||% ""), nrow(rows)),
     suspect_bearing = if ("suspect_bearing" %in% names(rows)) as.logical(rows$suspect_bearing) else rep(FALSE, nrow(rows)),
+    call_type = if ("call_type" %in% names(rows)) as.character(rows$call_type) else rep(NA_character_, nrow(rows)),
+    bearing = if ("bearing" %in% names(rows)) as.numeric(rows$bearing) else rep(NA_real_, nrow(rows)),
     stringsAsFactors = FALSE
   )
   if (!is.null(group_id)) {
@@ -617,7 +623,7 @@ prepare_acre_traps <- function(mic_data) {
   mics <- mics[order(mics$mic_id), , drop = FALSE]
   utm <- infer_wgs84_utm(mics$lng, mics$lat)
   coords <- lonlat_to_utm(mics$lng, mics$lat, zone = utm$zone, northern = utm$hemisphere == "north")
-  traps <- data.frame(x = coords$x, y = coords$y, stringsAsFactors = FALSE)
+  traps <- data.frame(x = coords$x, y = coords$y, row.names = as.character(mics$mic_id), stringsAsFactors = FALSE)
   lookup <- data.frame(
     trap = seq_len(nrow(mics)),
     mic_id = as.character(mics$mic_id),
@@ -672,21 +678,38 @@ build_acre_export_bundle <- function(timeline_data, mic_data, sessions, group_me
     stop("At least one detection is both grouped and removed.")
   }
 
-  trap_info <- prepare_acre_traps(mic_data)
-  sessions <- sessions[sessions$session_id %in% unique(active_rows$session_id), , drop = FALSE]
-  session_lookup <- data.frame(
-    session_id = as.character(sessions$session_id),
-    session = seq_len(nrow(sessions)),
-    real_start = sessions$real_start,
-    duration_seconds = as.numeric(sessions$duration_seconds),
-    stringsAsFactors = FALSE
-  )
-  active_rows <- dplyr::left_join(active_rows, session_lookup, by = "session_id")
-  active_rows <- dplyr::left_join(active_rows, trap_info$lookup[, c("trap", "mic_id"), drop = FALSE], by = "mic_id")
-  if (any(is.na(active_rows$session)) || any(is.na(active_rows$trap))) {
-    stop("Could not match all detections to acre sessions and traps.")
+  # Older single-array callers may omit cluster metadata.
+  if (!"cluster_id" %in% names(mic_data)) mic_data$cluster_id <- parse_cluster_id_from_mic_id(mic_data$mic_id)
+  if (!"cluster_id" %in% names(sessions)) {
+    ids <- unique(mic_data$cluster_id)
+    if (length(ids) != 1L) stop("Multi-array sessions require cluster_id.")
+    sessions$cluster_id <- ids
   }
-
+  window_lookup <- sessions
+  clusters <- sort(unique(as.character(sessions$cluster_id)))
+  session_lookup <- data.frame(
+    session = seq_along(clusters), cluster_id = clusters,
+    real_start = as.POSIXct(vapply(clusters, function(id) min(as.numeric(sessions$real_start[sessions$cluster_id == id])), numeric(1)), origin = "1970-01-01", tz = "UTC"),
+    duration_seconds = vapply(clusters, function(id) sum(sessions$duration_seconds[sessions$cluster_id == id]), numeric(1))
+  )
+  trap_tables <- lapply(clusters, function(id) prepare_acre_traps(mic_data[mic_data$cluster_id == id, , drop = FALSE]))
+  trap_lookup <- dplyr::bind_rows(lapply(seq_along(clusters), function(i) {
+    lookup <- trap_tables[[i]]$lookup
+    lookup$session <- i
+    lookup
+  }))
+  active_rows <- dplyr::left_join(active_rows, sessions[, c("session_id", "cluster_id"), drop = FALSE], by = "session_id", suffix = c("", ".window"))
+  if ("cluster_id.window" %in% names(active_rows)) active_rows$cluster_id <- active_rows$cluster_id.window
+  active_rows$cluster_id <- as.character(active_rows$cluster_id)
+  active_rows <- dplyr::left_join(active_rows, session_lookup, by = "cluster_id")
+  active_rows <- dplyr::left_join(active_rows, trap_lookup[, c("session", "trap", "mic_id")], by = c("session", "mic_id"))
+  if (anyNA(active_rows$session) || anyNA(active_rows$trap)) stop("Could not match detections to array sessions and traps.")
+  grouped <- dplyr::left_join(active_rows, group_membership[, c("rec_id", "group_ID")], by = "rec_id")
+  grouped <- grouped[!is.na(grouped$group_ID), ]
+  if (nrow(grouped)) {
+    windows <- split(grouped$session_id, paste(grouped$session, grouped$group_ID))
+    if (any(vapply(windows, function(x) length(unique(x)) > 1L, logical(1)))) stop("A group spans multiple recording windows within an array.")
+  }
   active_rows <- build_acre_capture_ids(active_rows, group_membership)
   captures <- data.frame(
     session = as.integer(active_rows$session),
@@ -694,6 +717,11 @@ build_acre_export_bundle <- function(timeline_data, mic_data, sessions, group_me
     trap = as.integer(active_rows$trap),
     bearing = as.numeric(active_rows$bearing) * pi / 180,
     toa = as.numeric(difftime(active_rows$toa, active_rows$real_start, units = "secs")),
+    call_type = if ("call_type" %in% names(active_rows)) as.character(active_rows$call_type) else rep(NA_character_, nrow(active_rows)),
+    suspect_bearing = if ("suspect_bearing" %in% names(active_rows)) as.logical(active_rows$suspect_bearing) else rep(FALSE, nrow(active_rows)),
+    rec_id = as.character(active_rows$rec_id),
+    recorder_ID = as.character(active_rows$mic_id),
+    group_ID = as.integer(active_rows$group_ID),
     stringsAsFactors = FALSE
   )
   captures <- captures[order(captures$session, captures$ID, captures$trap), , drop = FALSE]
@@ -701,6 +729,8 @@ build_acre_export_bundle <- function(timeline_data, mic_data, sessions, group_me
   capture_lookup <- data.frame(
     rec_id = as.character(active_rows$rec_id),
     acre_ID = as.integer(active_rows$ID),
+    group_ID = as.integer(active_rows$group_ID),
+    recorder_ID = as.character(active_rows$mic_id),
     acre_source = as.character(active_rows$acre_source),
     session = as.integer(active_rows$session),
     trap = as.integer(active_rows$trap),
@@ -710,18 +740,21 @@ build_acre_export_bundle <- function(timeline_data, mic_data, sessions, group_me
 
   metadata <- list(
     generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S %Z"),
-    utm = trap_info$utm,
-    trap_lookup = trap_info$lookup,
+    utm = trap_tables[[1]]$utm,
+    trap_lookup = trap_lookup,
+    recording_windows = window_lookup,
+    effort_method = "Sum of recording-window spans; assumes approximately simultaneous, continuous recorder operation without failures.",
     capture_lookup = capture_lookup,
     source_db_paths = as.character(source_db_paths),
+    bearing_units = "radians clockwise from north",
     included_auxiliary = c("bearing", "toa"),
     omitted_auxiliary = c("dist", "ss"),
-    notes = "Acre captures include all nonremoved detections. Grouped detections share an ID; ungrouped detections are singleton IDs."
+    notes = "Acre captures include all nonremoved detections. Grouped detections share a renumbered acre ID; group_ID retains the app ID and is NA for singleton detections. Trap indices refer to rows of the corresponding array session trap table, sorted by full recorder ID. Call-type display filters do not restrict this export."
   )
 
   list(
     captures = captures,
-    traps = trap_info$traps,
+    traps = lapply(trap_tables, `[[`, "traps"),
     sessions = session_lookup,
     survey.length = session_lookup$duration_seconds,
     metadata = metadata
@@ -739,7 +772,7 @@ save_acre_export_bundle <- function(bundle, file) {
 
 acre_script_text <- function(input_file = "acre_inputs.RData", buffer_m = 1000) {
   paste(
-    "# Acre model fitting script generated by vocomatcher",
+    "# Example acre analysis of Vocomatcher output",
     "",
     "library(acre)",
     "",
@@ -747,11 +780,36 @@ acre_script_text <- function(input_file = "acre_inputs.RData", buffer_m = 1000) 
     "if (!file.exists(input_file)) input_file <- file.choose()",
     "load(input_file)",
     "",
-    "# Review this buffer before serious analysis; it controls the mask around the detector array.",
+    "# all possible call types",
+    "table(captures$call_type)",
+    "# call types to include",
+    "include_call_types <- unique(captures$call_type) # All types; change to e.g. c(\"Female\").",
+    "analysis_captures <- subset(captures, call_type %in% include_call_types)",
+    "# call types to exclude",
+    "exclude_call_types <- c(\"FP\")",
+    "analysis_captures <- subset(analysis_captures, !(call_type %in% exclude_call_types))",
+    "",
+    "# Optional: exclude detections with suspect bearings (removes the entire detection).",
+    "# analysis_captures <- subset(analysis_captures, !suspect_bearing)",
+    "",
+    "# Set FALSE to fit model without bearings.",
+    "use_bearings <- TRUE",
+    "acre_columns <- c(\"session\", \"ID\", \"trap\", \"toa\", if (use_bearings) \"bearing\")",
+    "analysis_captures <- analysis_captures[, acre_columns, drop = FALSE]",
+    "",
+    "# One acre session per array; retain sessions even when filtering leaves no calls.",
+    "print(sessions[, c(\"session\", \"cluster_id\", \"duration_seconds\")])",
+    "",
+    "# Estimated effort sums recording-window spans, including empty windows.",
+    "# Assumes recorders start/stop approximately together and work continuously without failures.",
+    "# If incorrect add session-specific survey lengths manually",
+    "# length(survey.length) must == nrow(sessions)",
+    "",
+    "# Review the mask buffer before analysis.",
     sprintf("buffer_m <- %s", format(buffer_m, scientific = FALSE)),
     "",
     "dat <- acre::read.acre(",
-    "  captures = captures,",
+    "  captures = analysis_captures,",
     "  traps = traps,",
     "  control.mask = list(buffer = buffer_m),",
     "  survey.length = survey.length",

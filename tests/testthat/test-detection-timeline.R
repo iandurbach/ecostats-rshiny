@@ -280,8 +280,8 @@ test_that("grouped and removed action rows have expected export columns", {
   grouped <- format_detection_action_rows(rows, notes = "same call", group_id = 1)
   removed <- format_detection_action_rows(rows[1, , drop = FALSE], notes = "noise")
 
-  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
-  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing"))
+  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing"))
   expect_equal(grouped$group_ID, c(1L, 1L))
   expect_equal(grouped$grouping_method, c("manual", "manual"))
   expect_equal(grouped$detection_ID, c("1", "2"))
@@ -304,7 +304,7 @@ test_that("group membership exports keep the requested group data frame shape", 
 
   grouped <- export_grouped_detections(membership, rows)
 
-  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(grouped, c("group_ID", "grouping_method", "detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing"))
   expect_equal(grouped$group_ID, c(3L, 3L))
   expect_equal(grouped$grouping_method, c("manual", "manual"))
   expect_equal(grouped$Notes, c("same call", "same call"))
@@ -403,7 +403,7 @@ test_that("acre export bundle includes groups and singleton nonremoved detection
 
   bundle <- build_acre_export_bundle(timeline, mics, sessions, grouped, removed, source_db_paths = "one.sqlite3")
 
-  expect_named(bundle$captures, c("session", "ID", "trap", "bearing", "toa"))
+  expect_named(bundle$captures, c("session", "ID", "trap", "bearing", "toa", "call_type", "suspect_bearing", "rec_id", "recorder_ID", "group_ID"))
   expect_false(any(c("dist", "ss") %in% names(bundle$captures)))
   expect_equal(nrow(bundle$captures), 3)
   expect_equal(bundle$captures$ID[bundle$captures$trap %in% c(1L, 2L)][1:2], c(1L, 1L))
@@ -412,7 +412,7 @@ test_that("acre export bundle includes groups and singleton nonremoved detection
   expect_equal(bundle$captures$bearing, c(pi / 2, pi, 3 * pi / 2), tolerance = 1e-8)
   expect_equal(bundle$metadata$utm$epsg, 32648)
   expect_equal(bundle$metadata$source_db_paths, "one.sqlite3")
-  expect_equal(bundle$survey.length, 3600)
+  expect_equal(bundle$survey.length, 10800)
   expect_equal(nrow(bundle$sessions), 1)
 })
 
@@ -460,7 +460,7 @@ test_that("removed membership exports keep the requested removed data frame shap
 
   removed <- export_removed_detections(membership, rows)
 
-  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing"))
+  expect_named(removed, c("detection_ID", "recorder_ID", "detection_start_time", "detection_end_time", "Notes", "suspect_bearing", "call_type", "bearing"))
   expect_equal(removed$detection_ID, "2")
   expect_equal(removed$Notes, "noise")
   expect_true(removed$suspect_bearing[[1]])

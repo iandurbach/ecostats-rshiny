@@ -52,3 +52,20 @@ test_that("server-created confirmation controls use the module session namespace
   expect_match(server_code, 'session\\$ns\\("confirm_clear_session_groups"\\)')
   expect_false(grepl('actionButton\\(ns\\("confirm_clear_session_groups"', server_code))
 })
+
+
+test_that("startup does not query events for an unrendered timeline", {
+  shiny::testServer(mod_detection_timeline_server, {
+    expect_null(timeline_data())
+    expect_warning(session$flushReact(), NA)
+    expect_equal(output$session_summary, "No data loaded")
+  })
+})
+
+
+test_that("optional inputs follow Load data and share the optional styling", {
+  html <- paste(as.character(mod_detection_timeline_ui("test")), collapse = "\n")
+  expect_lt(regexpr('id="test-load_data"', html)[1], regexpr('id="test-existing_groups"', html)[1])
+  expect_lt(regexpr('id="test-existing_groups"', html)[1], regexpr('id="test-recorder_locations_input"', html)[1])
+  expect_match(html, 'class="optional-input"')
+})

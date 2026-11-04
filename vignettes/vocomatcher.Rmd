@@ -25,7 +25,7 @@ The main output is a record of:
 - notes, grouping method, and suspect-bearing flags; and
 - optional input files and an analysis script for the `acre` acoustic spatial capture–recapture package.
 
-This guide describes the prototype represented by the code in this repository in August 2026.
+This guide describes the app as updated in November 2026.
 
 > **The most important rule:** one group should represent one real call. A group may contain detections from several recorders, but should not contain two detections from the same call-recorder combination merely because they occur close together.
 
@@ -35,7 +35,7 @@ This guide describes the prototype represented by the code in this repository in
 knitr::include_graphics("images/app-overview-annotated.png")
 ```
 
-1. **Sidebar:** choose the input files, change spectrogram settings, and export results.
+1. **Sidebar:** choose the input files, click **Load data**, change spectrogram settings, and export results. The light blue **Load existing groups** and **Update recorder locations** buttons are optional.
 2. **Navigation and session summary:** move between recorder clusters and recording sessions. The summary reports the cluster, session number, UTC interval, and detection count.
 3. **Timeline:** each horizontal lane is a recorder; each dot is one detection. Time is shown in UTC.
 4. **Action bar:** add notes; group, ungroup, or remove selected detections; review groups; and run automatic grouping.
@@ -132,9 +132,27 @@ Click **Select SQLite database(s)**. In the file chooser:
 2. Select all relevant `.sqlite3` files. Multiple selection is allowed.
 3. Confirm the choice.
 
-The small status line beneath **Load data** updates to show the number of selected databases.
+The small status line beneath **Call type** updates to show the number of selected databases.
 
 Choose all recorders that should appear together. Loading only some recorders is allowed, but calls detected only by omitted recorders cannot be considered during grouping.
+
+### Update recorder locations
+
+The optional **Update recorder locations** button is below **Load existing groups**. Both optional buttons are light blue and appear beneath **Load data**. Upload a CSV with these named columns (column order does not matter):
+
+```csv
+recorder_ID,longitude,latitude
+NCNX06a,104.580590,18.170457
+NCNX06b,104.574652,18.171565
+```
+
+Use full recorder IDs matching the database filenames, including case, and verified WGS84 decimal degrees. Each recorder must occur once. Every loaded recorder needs a position, including recorders with no detections. Extra recorder IDs and extra columns are allowed, so a survey-wide CSV can be used when loading one array. Missing IDs, duplicate IDs, missing or invalid coordinates, and out-of-range values produce an error. The app never fills gaps with database positions.
+
+You can upload before **Load data**, in which case recorder coverage is checked during loading, or afterwards to apply positions immediately. A successful upload replaces all loaded recorder coordinates for the map, bearing origins, subsequent automatic grouping and acre export. Existing groups, removals and suspect-bearing flags are retained; review earlier matches that relied on bearing geometry. Recorder headings and the measured bearing angles remain unchanged.
+
+The input status shows the active location source and CSV filename. A rejected upload leaves the previous successfully loaded coordinates and grouping work intact; the rejected file cannot be used for a subsequent data load. Upload a valid replacement or click **Use database locations** to clear the override and restore all original database positions. Recorder coverage is checked again whenever new databases are loaded.
+
+The acre bundle records the active source in `metadata$location_source` and the actual coordinates in `metadata$trap_lookup`. Grouping checkpoints do not save the location override: upload the CSV again when resuming in a new app session. The source databases are never modified.
 
 ### Filter by call type
 
@@ -387,8 +405,10 @@ detection_groups_20260817_143000.RData
 
 It contains two R objects:
 
-- `groups`: one row per grouped detection, including `group_ID`, `grouping_method`, `Notes`, and `suspect_bearing` alongside detection information;
-- `removed_points`: detections marked as removed, including notes and suspect-bearing state.
+- `groups`: one row per grouped detection, including `group_ID`, `grouping_method`, `Notes`, `suspect_bearing`, `call_type`, and `bearing` alongside detection information;
+- `removed_points`: detections marked as removed, including notes, suspect-bearing state, `call_type`, and `bearing`.
+
+In these two objects, `bearing` is the absolute direction **in degrees clockwise from north**, after accounting for recorder orientation. Missing measurements remain `NA`; call type comes from the database and is not inferred from grouping. Older checkpoints remain loadable; exporting again obtains these measurements from the loaded databases.
 
 Save checkpoints regularly and keep the original databases unchanged alongside them.
 
@@ -475,13 +495,21 @@ The bundle includes five R objects:
 - `survey.length`: recording-session durations in seconds; and
 - `metadata`: UTM details, recorder and capture lookup tables, source database paths, and export notes.
 
-Known auxiliary measurements—time of arrival and bearing—are retained. The app does not invent signal strength or source-to-recorder distance. Export is disabled until suitable data are loaded and fails if a non-removed detection lies outside a recording session.
+Each row of `captures` also includes `call_type`, `suspect_bearing`, unique `rec_id`, full `recorder_ID`, and the original app `group_ID` (`NA` for unmatched singleton detections). Acre's `ID` is renumbered: it must not be compared directly with the app's group ID. Use `group_ID` or `metadata$capture_lookup` to trace groups.
+
+The numeric `trap` identifies a row of `traps[[session]]`, whose row names contain the full recorder IDs. Rows within each session table are sorted alphabetically by full recorder ID, independent of recorder position. A complete single array maps a–e to 1–5. With multiple arrays loaded, numbering restarts within each array. Captures can omit trap numbers when those recorders have no detections; retain their coordinate rows. Acre requires numeric row indices, rather than letter trap names. `metadata$trap_lookup` records the mapping explicitly.
+
+Known auxiliary measurements—time of arrival in seconds since session start and absolute bearing **in radians clockwise from north**—are retained. All nonremoved detections are exported, including FP and other call types; the displayed call-type filter does not restrict export. The app does not invent signal strength or source-to-recorder distance. Export is disabled until suitable data are loaded and fails if a non-removed detection lies outside a recording session.
 
 ### Export acre script
 
 Click **Export acre script** to download `fit_acre_*.R`. Put it beside the acre-input RData file. The script installs neither R nor packages; it expects the non-CRAN `acre` package and its dependencies to be available. Read and adapt its model settings before treating results as final.
 
-The generated script loads the bundle, builds the required acre data, creates a buffered mask, fits a basic model with `fit.acre`, and prints the result. Its default input filename is `acre_inputs.RData`, so either rename the downloaded bundle or edit the script to use its timestamped name.
+The generated script loads the bundle and offers editable `include_call_types` and `exclude_call_types` settings. By default, all call types are included and detections labelled `FP` are excluded; for example, set `include_call_types <- c("Female")` or `exclude_call_types <- c("FP")`. The filters use direct `%in%` matching: selecting `Female` includes only that label; include `NA` explicitly if missing labels should also remain. These filters apply to detection rows, so they can reduce the recorder coverage of a group. They do not alter the saved export, session definitions, or survey effort.
+
+`suspect_bearing` is review metadata and acre does not automatically act on it. Review these flags before analysis; set `use_bearings <- FALSE` to omit all bearings from the model input while retaining the detections. A commented optional line excludes entire detections marked `suspect_bearing`. The script passes only acre-supported measurement columns to `read.acre()`.
+
+The generated script builds the required acre data, creates a buffered mask, fits a basic model with `fit.acre`, and prints the result. Its default input filename is `acre_inputs.RData`, so either rename the downloaded bundle or edit the script to use its timestamped name.
 
 ## A recommended review routine
 
@@ -561,3 +589,30 @@ Grouping state lives in the current Shiny session until exported. Refreshing, cl
 | Export RData | Save groups and removed detections | All loaded data |
 | Export acre inputs | Save analysis-ready bundle | All non-removed data |
 | Export acre script | Save starter model-fitting script | Download only |
+
+
+### Multi-array acre analysis
+
+Acre export pools the app recording windows into one acre session per array.
+`traps` is a list, with one coordinate table per row of `sessions`. Capture
+`trap` numbers refer to rows of the corresponding session's table, starting
+at 1 within each array. This replaces the earlier project-wide numbering.
+Empty recording windows and arrays with no retained calls remain included.
+
+Estimated `survey.length` values sum the elapsed recording-window spans for
+each array (latest recorder stop minus earliest recorder start per window).
+This assumes recorders start and stop approximately together and function
+continuously throughout each window. Gaps and failures are not deducted.
+No detections are excluded by this effort calculation. The original windows
+are available in `metadata$recording_windows` for review.
+
+The script prints the session mapping and provides an optional manual override:
+
+```r
+# Add session-specific survey lengths manually
+# survey.length <- c(7200, 10800) # Seconds, in session order.
+```
+
+Review these estimates before analysis. The example fits shared model parameters
+across array sessions. Regenerate both the acre bundle and script together;
+the new script expects the session-specific list of trap tables.
