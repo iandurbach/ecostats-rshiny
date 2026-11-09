@@ -1,3 +1,40 @@
+test_that("database readers use the preferred available detection table", {
+  for (tables in list("Gibbon_A", "Gibbon_Detector",
+                      c("Gibbon_A", "Gibbon_Detector"))) {
+    db_path <- tempfile(fileext = ".sqlite3")
+    conn <- DBI::dbConnect(RSQLite::SQLite(), db_path)
+    tryCatch({
+      for (table in tables) {
+        DBI::dbWriteTable(conn, table, data.frame(
+          Id = 1L, UTC = "2026-01-28 22:58:02", Duration = 1,
+          BearingAngle1 = 0, Call_Type = table
+        ))
+      }
+      DBI::dbWriteTable(conn, "Trex_Location", data.frame(Longitude = 20, Latitude = -30))
+      DBI::dbWriteTable(conn, "Trex_Orientation", data.frame(True_Head = 0))
+      DBI::dbWriteTable(conn, "Trex_Time_Offset", data.frame(
+        UTC = "2026-01-28 22:58:00", TimeOffset = 0
+      ))
+      DBI::dbWriteTable(conn, "Sound_Acquisition", data.frame(
+        UTC = c("2026-01-28 22:58:00", "2026-01-28 22:59:00"),
+        Status = c("Start", "Stop"), SystemName = "test.wav",
+        Samples = c(0, 48000 * 60), sampleRate = 48000
+      ))
+
+      expected <- if ("Gibbon_Detector" %in% tables) "Gibbon_Detector" else tables[[1]]
+      expect_equal(resolve_detection_table(conn), expected)
+      expect_equal(read_database_call_types(db_path), expected)
+      out <- read_single_detection_database(db_path)
+      expect_equal(out$recData$detection_table, expected)
+      expect_equal(out$recData$call_type, expected)
+      expect_equal(out$recData$wav_file, "test.wav")
+    }, finally = {
+      DBI::dbDisconnect(conn)
+      unlink(db_path)
+    })
+  }
+})
+
 test_that("recorder id and cluster id are parsed from database paths", {
   expect_equal(parse_recorder_id_from_database_path("NCNX06a_database.sqlite3"), "NCNX06a")
   expect_equal(parse_cluster_id_from_mic_id("NCNX06a"), "06")

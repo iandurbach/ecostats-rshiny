@@ -24,9 +24,9 @@ read_database_table <- function(conn, table_name) {
 
 resolve_detection_table <- function(conn) {
   tables <- DBI::dbListTables(conn)
+  if ("Gibbon_Detector" %in% tables) return("Gibbon_Detector")
   if ("Gibbon_A" %in% tables) return("Gibbon_A")
-  if ("GibbonA" %in% tables) return("GibbonA")
-  stop("Database is missing detection table Gibbon_A/GibbonA.")
+  stop("Database is missing detection table Gibbon_Detector/Gibbon_A.")
 }
 
 read_database_call_types <- function(db_paths) {
@@ -37,7 +37,7 @@ read_database_call_types <- function(db_paths) {
     detection_table <- resolve_detection_table(conn)
     fields <- DBI::dbListFields(conn, detection_table)
     if (!"Call_Type" %in% fields) {
-      stop(paste(basename(db_path), "is missing Gibbon_A.Call_Type."))
+      stop(paste(basename(db_path), "is missing", paste0(detection_table, ".Call_Type.")))
     }
     DBI::dbGetQuery(
       conn,

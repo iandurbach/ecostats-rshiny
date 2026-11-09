@@ -99,7 +99,7 @@ WAV root/
 
 For example, `NCNX06a_database.sqlite3` is interpreted as recorder `NCNX06a`. Recorder IDs that share the same numeric part are treated as one recorder **cluster**: `NCNX06a` through `NCNX06e` form cluster `NCNX06`.
 
-The app currently expects PCM WAV files with 16-, 24-, or 32-bit samples. A database must contain the detection table `Gibbon_A` or `GibbonA`, including its `Call_Type` column, plus `Trex_Location`, `Trex_Orientation`, `Trex_Time_Offset`, and `Sound_Acquisition`.
+The app currently expects PCM WAV files with 16-, 24-, or 32-bit samples. A database must contain the detection table `Gibbon_Detector` or `Gibbon_A`, including its `Call_Type` column, plus `Trex_Location`, `Trex_Orientation`, `Trex_Time_Offset`, and `Sound_Acquisition`. If both detection tables exist, `Gibbon_Detector` is preferred.
 
 ## Quick start: the shortest successful workflow
 
