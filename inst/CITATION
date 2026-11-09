@@ -1,0 +1,11 @@
+bibentry(
+  bibtype = "Manual",
+  title = "VocoMatcher: An App to Visually Match Animal Vocalizations",
+  author = c(
+    person("Ian", "Durbach"),
+    person("Cornelia", "Oedekoven")
+  ),
+  year = "2026",
+  note = paste("R package version", meta$Version),
+  url = "https://github.com/iandurbach/ecostats-rshiny"
+)

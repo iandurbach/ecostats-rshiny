@@ -1,3 +1,32 @@
+test_that("missing Stop filenames use only the immediately preceding valid Start", {
+  acquisition <- data.frame(
+    UTC = c("2026-01-28 22:00:00", "2026-01-28 23:00:00"),
+    Status = c("Start", "Stop"), SystemName = c("test.wav", "test.wav"),
+    Samples = c(0, 48000 * 3600), sampleRate = 48000
+  )
+  expected <- pair_sound_acquisition_intervals(acquisition)
+  for (missing_name in c(NA_character_, "", "   ")) {
+    missing <- acquisition
+    missing$SystemName[[2]] <- missing_name
+    expect_identical(pair_sound_acquisition_intervals(missing), expected)
+    expect_identical(pair_sound_acquisition_intervals(missing[2:1, ]), expected)
+  }
+  # A populated filename must never be replaced, even when it differs.
+  populated <- acquisition
+  populated$SystemName[[2]] <- "other.wav"
+  expect_equal(nrow(pair_sound_acquisition_intervals(populated)), 0L)
+
+  invalid <- acquisition
+  invalid$SystemName[[2]] <- NA_character_
+  expect_error(pair_sound_acquisition_intervals(invalid[2, ]), "no immediately preceding valid Start")
+  invalid$UTC[[2]] <- invalid$UTC[[1]]
+  expect_error(pair_sound_acquisition_intervals(invalid), "no immediately preceding valid Start")
+  invalid <- rbind(acquisition, acquisition[2, ])
+  invalid$UTC[[3]] <- "2026-01-28 23:01:00"
+  invalid$SystemName[[3]] <- NA_character_
+  expect_error(pair_sound_acquisition_intervals(invalid), "no immediately preceding valid Start")
+})
+
 test_that("database readers use the preferred available detection table", {
   for (tables in list("Gibbon_A", "Gibbon_Detector",
                       c("Gibbon_A", "Gibbon_Detector"))) {

@@ -81,6 +81,27 @@ pair_sound_acquisition_intervals <- function(sound_acquisition) {
   sound_acquisition$utc_parsed <- parse_db_utc(sound_acquisition$UTC)
   sound_acquisition$Status <- trimws(as.character(sound_acquisition$Status))
   sound_acquisition$SystemName <- trimws(as.character(sound_acquisition$SystemName))
+  missing_stop_names <- which(
+    sound_acquisition$Status == "Stop" &
+      (is.na(sound_acquisition$SystemName) | !nzchar(sound_acquisition$SystemName))
+  )
+  if (length(missing_stop_names)) {
+    chronological_order <- order(sound_acquisition$utc_parsed, na.last = TRUE)
+    for (i in missing_stop_names) {
+      position <- match(i, chronological_order)
+      previous <- if (position > 1L) chronological_order[[position - 1L]] else NA_integer_
+      valid_start <- !is.na(previous) &&
+        isTRUE(sound_acquisition$Status[[previous]] == "Start") &&
+        !is.na(sound_acquisition$SystemName[[previous]]) &&
+        nzchar(sound_acquisition$SystemName[[previous]]) &&
+        isTRUE(sound_acquisition$utc_parsed[[previous]] < sound_acquisition$utc_parsed[[i]])
+      if (!valid_start) {
+        stop("Sound_Acquisition Stop row ", i,
+             " has no SystemName and no immediately preceding valid Start row.")
+      }
+      sound_acquisition$SystemName[[i]] <- sound_acquisition$SystemName[[previous]]
+    }
+  }
   starts <- sound_acquisition[sound_acquisition$Status == "Start", , drop = FALSE]
   stops <- sound_acquisition[sound_acquisition$Status == "Stop", , drop = FALSE]
 
@@ -190,7 +211,10 @@ read_single_detection_database <- function(db_path, offset_sign = 1) {
   offset_times <- parse_db_utc(offsets$UTC)
   applied_offsets <- nearest_time_offsets(raw_toa, offset_times, suppressWarnings(as.numeric(offsets$TimeOffset)))
   standardized_toa <- raw_toa + offset_sign * applied_offsets
-  intervals <- pair_sound_acquisition_intervals(sound_acquisition)
+  intervals <- tryCatch(
+    pair_sound_acquisition_intervals(sound_acquisition),
+    error = function(e) stop(basename(db_path), ": ", conditionMessage(e), call. = FALSE)
+  )
 
   rec_rows <- data.frame(
     recording_ID = paste0(mic_id, "_", detections$Id),
